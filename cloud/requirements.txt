@@ -1,0 +1,7 @@
+streamlit>=1.37
+google-api-python-client>=2.130
+google-auth>=2.29
+pillow>=10.0
+streamlit-image-coordinates>=0.1.6
+
+

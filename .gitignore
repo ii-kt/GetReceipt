@@ -1,0 +1,11 @@
+data/
+logs/
+_output/
+cloud/data/
+__pycache__/
+*.pyc
+.streamlit/secrets.toml
+cloud/.streamlit/secrets.toml
+*.log
+
+
