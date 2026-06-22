@@ -21,7 +21,7 @@ def safe_name_part(value: Any) -> str:
 
 
 def normalize_amount_yen(value: Any) -> int:
-    text = unicodedata.normalize("NFKC", str(value or ""))
+    text = unicodedata.normalize("NFKC", str("" if value is None else value))
     text = text.replace(",", "").replace("\u5186", "").replace("\uffe5", "").replace("\u00a5", "").strip()
     if not re.fullmatch(r"\d+", text):
         raise ValueError("\u91d1\u984d\u306f0\u4ee5\u4e0a\u306e\u6574\u6570\u3067\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044\u3002")
