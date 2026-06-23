@@ -1,18 +1,21 @@
 # GetReceipt
 
-iPhone縺九ｉPC繧定ｵｷ蜍輔○縺壹↓縲・伜庶譖ｸ繝ｻ譏守ｴｰ繧貞叙蠕励＠縺ｦGoogle Drive縺ｸ菫晏ｭ倥☆繧鬼treamlit Community Cloud迚医〒縺吶・
-## Streamlit Cloud險ｭ螳・
+iPhoneからPCを起動せずに、領収書・明細を取得してGoogle Driveへ保存するStreamlit Community Cloud版です。
+
+## Streamlit Cloud設定
+
 - Repository: `ii-kt/GetReceipt`
 - Branch: `main`
 - Main file path: `cloud/streamlit_app.py`
 - Python dependencies: `cloud/requirements.txt`
 - OS packages: `packages.txt`
 - Streamlit config: `.streamlit/config.toml`
-- 菫晏ｭ伜・: https://drive.google.com/drive/folders/1jwaMMK-KGIyUampBWOjRIY3BULuj6W-M
+- 保存先: https://drive.google.com/drive/folders/1jwaMMK-KGIyUampBWOjRIY3BULuj6W-M
 
 ## Secrets
 
-Streamlit Community Cloud縺ｮAdvanced settings縺ｧ縲；oogle Drive逕ｨ繧ｵ繝ｼ繝薙せ繧｢繧ｫ繧ｦ繝ｳ繝医ｒ谺｡縺ｮ蠖｢縺ｧ逋ｻ骭ｲ縺励∪縺吶・
+Streamlit Community CloudのAdvanced settingsで、Google Drive用サービスアカウントを次の形で登録します。
+
 ```toml
 [google_service_account]
 type = "service_account"
@@ -28,7 +31,12 @@ client_x509_cert_url = "https://www.googleapis.com/robot/v1/metadata/x509/your-s
 universe_domain = "googleapis.com"
 ```
 
-Google Drive縺ｮ鬆伜庶譖ｸ繝輔か繝ｫ繝縺ｯ縲√し繝ｼ繝薙せ繧｢繧ｫ繧ｦ繝ｳ繝医・繝｡繝ｼ繝ｫ繧｢繝峨Ξ繧ｹ縺ｫ邱ｨ髮・・→縺励※蜈ｱ譛峨＠縺ｦ縺上□縺輔＞縲・
-## 讒区・
+Google Driveの領収書フォルダは、サービスアカウントのメールアドレスに編集者として共有してください。
 
-Streamlit UI縺・`app/main.js` 縺ｮNode繝ｯ繝ｼ繧ｫ繝ｼ繧定ｵｷ蜍輔＠縲～app/lib` 縺ｨ `app/config` 縺ｮ蜿門ｾ怜・逅・ｒ菴ｿ縺・∪縺吶ょ叙蠕励＠縺溘ヵ繧｡繧､繝ｫ縺ｯGoogle Drive縺ｸ繧｢繝・・繝ｭ繝ｼ繝峨＠縲∽ｿ晏ｭ伜床蟶ｳ繧・rive荳翫〒譖ｴ譁ｰ縺励∪縺吶・
+## 使い方
+
+1. 「取得状況」で対象月とサービスを選びます。
+2. 「取得開始」から公式サイトを開き、iPhoneで領収書・明細をダウンロードします。
+3. このアプリの「手動登録」に戻り、ファイルと金額を登録してGoogle Driveへ保存します。
+
+クラウド版はPCやNodeの常駐プロセスを使いません。ログイン情報は保存せず、各社の公式サイトで認証します。
