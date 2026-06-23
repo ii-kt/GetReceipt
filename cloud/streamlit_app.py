@@ -340,6 +340,379 @@ def inject_design() -> None:
           }
         }
         </style>
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=Zen+Kaku+Gothic+New:wght@400;500;700;900&display=swap');
+
+        :root {
+          --gr-bg: #f3f5f2;
+          --gr-surface: #ffffff;
+          --gr-surface-muted: #e8eeea;
+          --gr-ink: #1f2923;
+          --gr-muted: #63706a;
+          --gr-line: #d2dbd4;
+          --gr-blue: #3159c6;
+          --gr-coral: #df5a42;
+          --gr-green: #177b66;
+          --gr-radius: 6px;
+          --gr-ease: cubic-bezier(.2, .7, .2, 1);
+        }
+
+        body,
+        .stApp {
+          font-family: "IBM Plex Sans", "Zen Kaku Gothic New", system-ui, sans-serif;
+          color: var(--gr-ink);
+          background: var(--gr-bg);
+        }
+
+        [data-testid="stHeader"] {
+          background: rgba(243, 245, 242, .88);
+          backdrop-filter: blur(14px);
+          border-bottom: 1px solid var(--gr-line);
+        }
+
+        .block-container {
+          max-width: 1240px;
+          padding: 2rem 1.5rem 4.5rem;
+        }
+
+        .gr-masthead {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto;
+          align-items: end;
+          gap: 1.5rem;
+          padding: 1.1rem 0 1.35rem;
+          border-top: 6px solid var(--gr-ink);
+          animation: gr-enter .48s var(--gr-ease) both;
+        }
+
+        .gr-eyebrow,
+        .gr-section-eyebrow,
+        .gr-header-status,
+        .gr-month-strip span {
+          margin: 0;
+          color: var(--gr-muted);
+          font-family: "IBM Plex Mono", "Zen Kaku Gothic New", monospace;
+          font-size: .69rem;
+          font-weight: 600;
+          letter-spacing: .11em;
+          line-height: 1.2;
+        }
+
+        .gr-masthead h1 {
+          margin: .3rem 0 0 !important;
+          color: var(--gr-ink);
+          font-family: "Zen Kaku Gothic New", "IBM Plex Sans", sans-serif;
+          font-size: 2.65rem !important;
+          font-weight: 900 !important;
+          letter-spacing: -.025em;
+          line-height: 1.04 !important;
+        }
+
+        .gr-masthead h1::after {
+          display: none !important;
+        }
+
+        .gr-brand-note {
+          margin: .55rem 0 0;
+          color: var(--gr-muted);
+          font-size: .92rem;
+          line-height: 1.6;
+        }
+
+        .gr-header-status {
+          display: grid;
+          gap: .35rem;
+          min-width: 13.5rem;
+          padding: .9rem 1rem;
+          border: 1px solid var(--gr-line);
+          border-left: 4px solid var(--gr-coral);
+          background: var(--gr-surface);
+          color: var(--gr-ink);
+        }
+
+        .gr-header-status strong {
+          font-family: "IBM Plex Sans", "Zen Kaku Gothic New", sans-serif;
+          font-size: .86rem;
+          letter-spacing: 0;
+        }
+
+        .gr-month-strip {
+          display: grid;
+          grid-template-columns: repeat(12, minmax(0, 1fr));
+          gap: 3px;
+          margin: 0 0 1.8rem;
+          animation: gr-enter .48s .08s var(--gr-ease) both;
+        }
+
+        .gr-month-strip span {
+          display: grid;
+          place-items: center;
+          min-height: 2.15rem;
+          background: var(--gr-surface-muted);
+          color: var(--gr-ink);
+        }
+
+        .gr-month-strip span:nth-child(3n + 1) {
+          border-top: 3px solid var(--gr-blue);
+        }
+
+        .gr-month-strip span:nth-child(3n + 2) {
+          border-top: 3px solid var(--gr-green);
+        }
+
+        .gr-month-strip span:nth-child(3n) {
+          border-top: 3px solid var(--gr-coral);
+        }
+
+        .gr-section-heading {
+          display: grid;
+          gap: .28rem;
+          margin: 2rem 0 1.15rem;
+          animation: gr-enter .42s .12s var(--gr-ease) both;
+        }
+
+        .gr-section-heading h2 {
+          margin: 0;
+          color: var(--gr-ink);
+          font-family: "Zen Kaku Gothic New", "IBM Plex Sans", sans-serif;
+          font-size: 1.45rem;
+          font-weight: 900;
+          letter-spacing: -.015em;
+        }
+
+        .gr-section-heading p:last-child {
+          margin: 0;
+          color: var(--gr-muted);
+          font-size: .9rem;
+          line-height: 1.6;
+        }
+
+        div[data-testid="stTabs"] {
+          margin: 0 0 .45rem;
+          animation: gr-enter .45s .16s var(--gr-ease) both;
+        }
+
+        div[data-testid="stTabs"] [role="tablist"] {
+          gap: 1.4rem;
+          width: 100%;
+          overflow-x: auto;
+          border-bottom: 1px solid var(--gr-line);
+        }
+
+        div[data-testid="stTabs"] button[role="tab"] {
+          min-height: 3rem;
+          padding: .6rem 0 .7rem;
+          border: 0;
+          border-bottom: 3px solid transparent;
+          border-radius: 0;
+          color: var(--gr-muted);
+          font-family: "Zen Kaku Gothic New", "IBM Plex Sans", sans-serif;
+          font-weight: 700;
+          transition: color .2s ease, border-color .2s ease;
+        }
+
+        div[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
+          border-bottom-color: var(--gr-coral);
+          color: var(--gr-ink);
+          background: transparent;
+          box-shadow: none;
+        }
+
+        h3 {
+          margin: 1.35rem 0 .75rem !important;
+          color: var(--gr-ink);
+          font-family: "Zen Kaku Gothic New", "IBM Plex Sans", sans-serif;
+          font-size: 1rem !important;
+          font-weight: 900 !important;
+          letter-spacing: 0 !important;
+        }
+
+        [data-testid="stHorizontalBlock"] {
+          gap: .8rem;
+        }
+
+        .stButton > button,
+        .stDownloadButton > button,
+        [data-testid="stLinkButton"] > a {
+          min-height: 2.7rem;
+          border: 1px solid var(--gr-line) !important;
+          border-radius: var(--gr-radius) !important;
+          background: var(--gr-surface) !important;
+          color: var(--gr-ink) !important;
+          font-family: "Zen Kaku Gothic New", "IBM Plex Sans", sans-serif !important;
+          font-size: .9rem !important;
+          font-weight: 700 !important;
+          letter-spacing: 0 !important;
+          box-shadow: none !important;
+          transition: background .2s ease, border-color .2s ease, color .2s ease, transform .2s ease;
+        }
+
+        .stButton > button:hover,
+        .stDownloadButton > button:hover,
+        [data-testid="stLinkButton"] > a:hover {
+          border-color: var(--gr-blue) !important;
+          background: #eef2ff !important;
+          color: var(--gr-blue) !important;
+          transform: translateY(-1px);
+        }
+
+        .stButton > button:active,
+        .stDownloadButton > button:active,
+        [data-testid="stLinkButton"] > a:active {
+          transform: translateY(0) scale(.99);
+        }
+
+        .stButton > button[kind="primary"],
+        .stButton > button[data-testid="baseButton-primary"],
+        [data-testid="stLinkButton"] > a[kind="primary"] {
+          border-color: var(--gr-coral) !important;
+          background: var(--gr-coral) !important;
+          color: #ffffff !important;
+        }
+
+        .stButton > button[kind="primary"]:hover,
+        .stButton > button[data-testid="baseButton-primary"]:hover,
+        [data-testid="stLinkButton"] > a[kind="primary"]:hover {
+          border-color: #bc3f2d !important;
+          background: #bc3f2d !important;
+          color: #ffffff !important;
+        }
+
+        [data-testid="stTextInput"] input,
+        [data-testid="stNumberInput"] input,
+        [data-testid="stDateInput"] input,
+        [data-baseweb="select"] > div,
+        [data-testid="stFileUploader"] section {
+          border-radius: var(--gr-radius) !important;
+          border-color: var(--gr-line) !important;
+          background: var(--gr-surface) !important;
+          box-shadow: none !important;
+        }
+
+        [data-testid="stTextInput"] label,
+        [data-testid="stNumberInput"] label,
+        [data-testid="stDateInput"] label,
+        [data-testid="stSelectbox"] label,
+        [data-testid="stFileUploader"] label {
+          color: var(--gr-muted) !important;
+          font-family: "IBM Plex Mono", "Zen Kaku Gothic New", monospace;
+          font-size: .7rem !important;
+          font-weight: 600 !important;
+          text-transform: uppercase !important;
+          letter-spacing: .08em;
+        }
+
+        code,
+        pre,
+        [data-testid="stCodeBlock"] {
+          font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Consolas, monospace !important;
+          border-radius: var(--gr-radius) !important;
+        }
+
+        [data-testid="stCodeBlock"] {
+          border: 1px solid var(--gr-line);
+          background: var(--gr-surface-muted) !important;
+        }
+
+        [data-testid="stFileUploader"] section {
+          border-style: dashed !important;
+          padding: .75rem !important;
+        }
+
+        div[data-testid="stAlert"] {
+          border: 1px solid var(--gr-line);
+          border-left: 4px solid var(--gr-blue);
+          border-radius: 0 var(--gr-radius) var(--gr-radius) 0 !important;
+          box-shadow: none;
+        }
+
+        div[data-testid="stDataFrame"] {
+          overflow: hidden;
+          border: 1px solid var(--gr-line);
+          border-radius: var(--gr-radius);
+          box-shadow: none;
+        }
+
+        [data-testid="stDataFrame"] [role="columnheader"] {
+          background: var(--gr-surface-muted);
+        }
+
+        [data-testid="stCaptionContainer"] {
+          color: var(--gr-muted);
+          font-size: .87rem;
+          line-height: 1.65;
+        }
+
+        @keyframes gr-enter {
+          from { opacity: 0; transform: translateY(8px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+
+        @media (max-width: 760px) {
+          .block-container {
+            padding: 1.35rem .9rem 3rem;
+          }
+
+          .gr-masthead {
+            grid-template-columns: 1fr;
+            gap: 1rem;
+            padding-top: .9rem;
+          }
+
+          .gr-masthead h1 {
+            font-size: 2.2rem !important;
+          }
+
+          .gr-header-status {
+            min-width: 0;
+          }
+
+          .gr-month-strip {
+            grid-template-columns: repeat(6, minmax(0, 1fr));
+          }
+
+          div[data-testid="stTabs"] [role="tablist"] {
+            gap: 1rem;
+          }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_workspace_header() -> None:
+    st.markdown(
+        """
+        <header class="gr-masthead">
+          <div>
+            <p class="gr-eyebrow">PERSONAL RECEIPT ARCHIVE</p>
+            <h1>GetReceipt</h1>
+            <p class="gr-brand-note">\u9818\u53ce\u66f8\u4fdd\u7ba1\u53f0\u5e33</p>
+          </div>
+          <div class="gr-header-status">
+            <span>STORAGE</span>
+            <strong>Google Drive</strong>
+          </div>
+        </header>
+        <div class="gr-month-strip" aria-label="month index">
+          <span>01</span><span>02</span><span>03</span><span>04</span>
+          <span>05</span><span>06</span><span>07</span><span>08</span>
+          <span>09</span><span>10</span><span>11</span><span>12</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_section_heading(eyebrow: str, title: str, detail: str) -> None:
+    st.markdown(
+        f"""
+        <div class="gr-section-heading">
+          <p class="gr-section-eyebrow">{eyebrow}</p>
+          <h2>{title}</h2>
+          <p>{detail}</p>
+        </div>
         """,
         unsafe_allow_html=True,
     )
@@ -376,7 +749,7 @@ def status_text(record: dict[str, str] | None) -> str:
 
 
 def render_dashboard() -> None:
-    st.subheader(TEXT["dashboard"])
+    render_section_heading("ARCHIVE INDEX", TEXT["dashboard"], "\u5bfe\u8c61\u306e\u6708\u3068\u30b5\u30fc\u30d3\u30b9\u3092\u9078\u629e")
     records = ledger().read()
     latest = latest_status_by_month(records)
     months = list(reversed(selectable_months()))
@@ -409,7 +782,7 @@ def select_for_acquisition(service_id: str, target_month: str) -> None:
 
 
 def render_acquisition_form() -> None:
-    st.subheader(TEXT["start"])
+    render_section_heading("SOURCE", "\u516c\u5f0f\u30b5\u30a4\u30c8\u304b\u3089\u53d6\u5f97", "\u30b5\u30fc\u30d3\u30b9\u3068\u5bfe\u8c61\u6708\u3092\u9078\u629e")
     months = selectable_months()
     service_ids = [service.id for service in SERVICES]
     selected_service = st.selectbox(
@@ -434,11 +807,7 @@ def render_acquisition_form() -> None:
 
 
 def render_manual_upload() -> None:
-    st.subheader(TEXT["manual"])
-    st.caption(
-        "iPhone\u306b\u30c0\u30a6\u30f3\u30ed\u30fc\u30c9\u3057\u305f\u9818\u53ce\u66f8\u30fb\u660e\u7d30\u3092\u3001"
-        "\u6b63\u3057\u3044\u540d\u524d\u3067Google Drive\u306b\u4fdd\u5b58\u3057\u307e\u3059\u3002"
-    )
+    render_section_heading("INTAKE", "\u30d5\u30a1\u30a4\u30eb\u3092\u4fdd\u7ba1", "iPhone\u306e\u30d5\u30a1\u30a4\u30eb\u3092Google Drive\u3078\u4fdd\u5b58")
 
     months = selectable_months()
     service_ids = [service.id for service in SERVICES]
@@ -530,7 +899,7 @@ def render_manual_upload() -> None:
 
 
 def render_history() -> None:
-    st.subheader(TEXT["ledger"])
+    render_section_heading("LEDGER", TEXT["ledger"], "\u4fdd\u5b58\u6e08\u307f\u306e\u9818\u53ce\u66f8\u30fb\u660e\u7d30")
     records = ledger().read()
     if not records:
         st.info("\u307e\u3060\u4fdd\u5b58\u5c65\u6b74\u306f\u3042\u308a\u307e\u305b\u3093\u3002")
@@ -545,7 +914,7 @@ def render_history() -> None:
 
 
 def render_settings() -> None:
-    st.subheader(TEXT["settings"])
+    render_section_heading("CONNECTION", TEXT["settings"], "Google Drive\u3068\u306e\u9023\u643a\u72b6\u614b")
     st.write("Google Drive\u4fdd\u5b58\u5148")
     st.code(RECEIPT_DRIVE_FOLDER_ID, language="text")
     st.link_button("\u9818\u53ce\u66f8\u30d5\u30a9\u30eb\u30c0\u3092\u958b\u304f", RECEIPT_DRIVE_FOLDER_URL)
@@ -568,9 +937,7 @@ def _mime_type(extension: str) -> str:
 
 
 inject_design()
-
-st.title(TEXT["title"])
-st.caption(TEXT["caption"])
+render_workspace_header()
 
 tabs = st.tabs([TEXT["dashboard"], TEXT["start"], TEXT["manual"], TEXT["ledger"], TEXT["settings"]])
 with tabs[0]:
