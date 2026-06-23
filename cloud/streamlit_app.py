@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 6857)
-Total output lines: 764
-
 from __future__ import annotations
 
 from datetime import date
@@ -94,6 +91,7 @@ def inject_design() -> None:
         }
 
         html {
+          color-scheme: light;
           scroll-behavior: smooth;
         }
 
@@ -131,7 +129,531 @@ def inject_design() -> None:
           width: fit-content;
           margin-bottom: .25rem !important;
           letter-spacing: 0;
-          font-family: "Inter", "…4857 tokens truncated…nt != last:
+          font-family: "Inter", "Noto Sans JP", system-ui, sans-serif;
+          font-size: clamp(2.25rem, 6vw, 4.2rem) !important;
+          font-weight: 800 !important;
+          line-height: .95 !important;
+          color: var(--gr-text);
+        }
+
+        h1::after {
+          content: "";
+          display: block;
+          width: min(68vw, 520px);
+          height: 4px;
+          margin-top: 1rem;
+          border-radius: 999px;
+          background: linear-gradient(90deg, var(--gr-accent), var(--gr-accent-2), #91b7ff, var(--gr-accent));
+          background-size: 220% 100%;
+          animation: gr-rail 5.5s linear infinite;
+          box-shadow: 0 8px 24px rgba(37, 99, 235, 0.18);
+        }
+
+        h2, h3, [data-testid="stMarkdownContainer"] strong {
+          letter-spacing: 0;
+        }
+
+        [data-testid="stCaptionContainer"] {
+          max-width: 720px;
+          color: var(--gr-muted);
+          font-size: 1.02rem;
+          line-height: 1.8;
+        }
+
+        [data-testid="stVerticalBlock"] > [style*="flex-direction: column;"] > [data-testid="stVerticalBlock"] {
+          gap: .85rem;
+        }
+
+        div[data-testid="stTabs"] {
+          margin-top: 1.4rem;
+        }
+
+        div[data-testid="stTabs"] [role="tablist"] {
+          gap: .35rem;
+          padding: .35rem;
+          width: fit-content;
+          max-width: 100%;
+          overflow-x: auto;
+          border: 1px solid rgba(219, 227, 239, .9);
+          border-radius: var(--gr-radius);
+          background: rgba(255, 255, 255, .78);
+          box-shadow: var(--gr-shadow-soft);
+        }
+
+        div[data-testid="stTabs"] button[role="tab"] {
+          min-height: 2.45rem;
+          padding: .45rem .85rem;
+          border-radius: 7px;
+          color: var(--gr-muted);
+          font-weight: 700;
+          transition: color .2s ease, background .2s ease, box-shadow .2s ease;
+        }
+
+        div[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
+          color: var(--gr-text);
+          background: #eef4ff;
+          box-shadow: inset 0 0 0 1px rgba(37, 99, 235, .16);
+        }
+
+        div[data-testid="stTabs"] button[role="tab"] p {
+          font-size: .92rem;
+        }
+
+        [data-testid="stVerticalBlockBorderWrapper"],
+        [data-testid="stForm"],
+        [data-testid="stFileUploader"],
+        div[data-testid="stDataFrame"],
+        div[data-testid="stAlert"] {
+          border-radius: var(--gr-radius) !important;
+        }
+
+        div[data-testid="stDataFrame"] {
+          overflow: hidden;
+          border: 1px solid rgba(219, 227, 239, .9);
+          box-shadow: var(--gr-shadow-soft);
+        }
+
+        [data-testid="stMetric"] {
+          padding: 1rem;
+          border: 1px solid rgba(219, 227, 239, .9);
+          border-radius: var(--gr-radius);
+          background: var(--gr-surface);
+          box-shadow: var(--gr-shadow-soft);
+        }
+
+        .stButton > button,
+        .stDownloadButton > button,
+        a[data-testid="stLinkButton"] {
+          border-radius: var(--gr-radius) !important;
+          border: 1px solid rgba(37, 99, 235, .14) !important;
+          background: linear-gradient(180deg, #ffffff 0%, #f6f9ff 100%) !important;
+          color: var(--gr-text) !important;
+          font-weight: 700 !important;
+          letter-spacing: 0 !important;
+          box-shadow: 0 1px 0 rgba(255, 255, 255, .9) inset, var(--gr-shadow-soft);
+          transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease, background .2s ease;
+        }
+
+        .stButton > button:hover,
+        .stDownloadButton > button:hover,
+        a[data-testid="stLinkButton"]:hover {
+          transform: translateY(-1px);
+          border-color: rgba(37, 99, 235, .38) !important;
+          box-shadow: 0 12px 28px rgba(37, 99, 235, .12);
+        }
+
+        .stButton > button:active,
+        .stDownloadButton > button:active,
+        a[data-testid="stLinkButton"]:active {
+          transform: translateY(0) scale(.99);
+        }
+
+        .stButton > button[kind="primary"],
+        .stButton > button[data-testid="baseButton-primary"] {
+          background: linear-gradient(135deg, var(--gr-accent), #174ccf) !important;
+          color: #ffffff !important;
+          border-color: rgba(37, 99, 235, .8) !important;
+          box-shadow: 0 16px 30px rgba(37, 99, 235, .22);
+        }
+
+        .stButton > button:focus-visible,
+        .stDownloadButton > button:focus-visible,
+        a[data-testid="stLinkButton"]:focus-visible,
+        input:focus-visible,
+        textarea:focus-visible,
+        [role="tab"]:focus-visible {
+          outline: 3px solid rgba(37, 99, 235, .32) !important;
+          outline-offset: 2px !important;
+        }
+
+        [data-testid="stTextInput"] input,
+        [data-testid="stNumberInput"] input,
+        [data-testid="stDateInput"] input,
+        [data-baseweb="select"] > div,
+        [data-testid="stFileUploader"] section {
+          border-radius: var(--gr-radius) !important;
+          border-color: rgba(219, 227, 239, .95) !important;
+          background: rgba(255, 255, 255, .9) !important;
+          box-shadow: 0 1px 0 rgba(255,255,255,.7) inset;
+        }
+
+        [data-testid="stTextInput"] label,
+        [data-testid="stNumberInput"] label,
+        [data-testid="stDateInput"] label,
+        [data-testid="stSelectbox"] label,
+        [data-testid="stRadio"] label,
+        [data-testid="stFileUploader"] label {
+          color: var(--gr-muted) !important;
+          font-size: .82rem !important;
+          font-weight: 800 !important;
+          text-transform: uppercase;
+          letter-spacing: .08em;
+        }
+
+        code,
+        pre,
+        [data-testid="stCodeBlock"] {
+          font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace !important;
+          border-radius: var(--gr-radius) !important;
+        }
+
+        [data-testid="stProgress"] > div > div > div {
+          background: linear-gradient(90deg, var(--gr-accent), var(--gr-accent-2)) !important;
+        }
+
+        [data-testid="stSpinner"] {
+          color: var(--gr-accent) !important;
+        }
+
+        div[data-testid="stAlert"] {
+          border: 1px solid rgba(219, 227, 239, .9);
+          box-shadow: var(--gr-shadow-soft);
+        }
+
+        [data-testid="stImage"] img {
+          border-radius: var(--gr-radius);
+          border: 1px solid rgba(219, 227, 239, .9);
+          box-shadow: var(--gr-shadow);
+        }
+
+        @keyframes gr-rise {
+          from { opacity: 0; transform: translateY(10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes gr-rail {
+          from { background-position: 0% 50%; }
+          to { background-position: 220% 50%; }
+        }
+
+        @media (max-width: 760px) {
+          .block-container {
+            padding: 1.35rem .85rem 2.6rem;
+          }
+
+          h1 {
+            font-size: 2.35rem !important;
+          }
+
+          h1::after {
+            width: 82vw;
+          }
+
+          div[data-testid="stTabs"] [role="tablist"] {
+            width: 100%;
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          *,
+          *::before,
+          *::after {
+            animation-duration: .001ms !important;
+            animation-iteration-count: 1 !important;
+            scroll-behavior: auto !important;
+            transition-duration: .001ms !important;
+          }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+@st.cache_resource
+def backend_client() -> BackendClient:
+    return BackendClient()
+
+
+def ledger() -> ReceiptLedger:
+    return ReceiptLedger(LEDGER_PATH)
+
+
+def secrets_configured() -> bool:
+    try:
+        return "google_service_account" in st.secrets
+    except Exception:
+        return False
+
+
+def latest_status_by_month(records: list[dict[str, str]]) -> dict[tuple[str, str], dict[str, str]]:
+    latest: dict[tuple[str, str], dict[str, str]] = {}
+    for record in records:
+        key = (record.get("target_month", ""), record.get("service_id", ""))
+        if key not in latest:
+            latest[key] = record
+    return latest
+
+
+def status_text(record: dict[str, str] | None) -> str:
+    if not record:
+        return TEXT["unfetched"]
+    if record.get("status") == "uploaded":
+        return TEXT["uploaded"]
+    if record.get("status") == "not_issued":
+        return TEXT["not_issued"]
+    return TEXT["unfetched"]
+
+
+def render_dashboard() -> None:
+    st.subheader(TEXT["dashboard"])
+    records = ledger().read()
+    latest = latest_status_by_month(records)
+    months = list(reversed(selectable_months()))
+
+    header_cols = st.columns([1.35, 1, 1, 1, 1])
+    header_cols[0].markdown(f"**{TEXT['target_month']}**")
+    for index, service in enumerate(SERVICES, start=1):
+        header_cols[index].markdown(f"**{service.label}**")
+
+    for target_month in months:
+        row = st.columns([1.35, 1, 1, 1, 1])
+        row[0].write(month_label(target_month))
+        for index, service in enumerate(SERVICES, start=1):
+            record = latest.get((target_month, service.id))
+            label = status_text(record)
+            if row[index].button(label, key=f"run:{target_month}:{service.id}", use_container_width=True):
+                run_acquisition(service.id, target_month, "pdf", force=False)
+
+
+def run_acquisition(service_id: str, target_month: str, file_format: str, force: bool) -> None:
+    if not secrets_configured():
+        st.error("Google Drive\u7528\u306eSecrets\u304c\u672a\u8a2d\u5b9a\u3067\u3059\u3002\u5148\u306b\u8a2d\u5b9a\u3057\u3066\u304f\u3060\u3055\u3044\u3002")
+        return
+
+    year, month = parse_month_key(target_month)
+    status = st.empty()
+    progress = st.progress(0)
+    client = backend_client()
+
+    try:
+        client.ensure_started()
+        client.start_download(service=service_id, year=year, month=month, file_format=file_format, force=force)
+    except BackendError as error:
+        st.error(str(error))
+        return
+
+    deadline = time.time() + 240
+    task = {}
+    while time.time() < deadline:
+        try:
+            state = client.state()
+        except BackendError as error:
+            st.error(str(error))
+            return
+        task = state.get("task") or {}
+        message = task.get("message") or "\u53d6\u5f97\u51e6\u7406\u4e2d\u3067\u3059\u3002"
+        status.info(message)
+        elapsed = min(0.95, max(0.05, (time.time() - (deadline - 240)) / 240))
+        progress.progress(elapsed)
+        if not task.get("running"):
+            break
+        time.sleep(1.5)
+
+    progress.progress(1.0)
+    handle_finished_task(service_id, target_month, task)
+
+
+def handle_finished_task(service_id: str, target_month: str, task: dict) -> None:
+    phase = task.get("phase")
+    result = task.get("lastResult") or {}
+    error = task.get("error") or {}
+
+    if phase == "done" and result.get("record"):
+        try:
+            storage = drive_storage_from_secrets(st.secrets)
+            saved = upload_backend_record_to_drive(
+                record=result["record"],
+                storage=storage,
+                ledger=ledger(),
+            )
+        except (DriveConfigError, BackendError, Exception) as upload_error:
+            st.error(f"Google Drive\u3078\u306e\u4fdd\u5b58\u306b\u5931\u6557\u3057\u307e\u3057\u305f: {upload_error}")
+            return
+        st.success("Google Drive\u3078\u4fdd\u5b58\u3057\u3001\u53f0\u5e33\u3092\u66f4\u65b0\u3057\u307e\u3057\u305f\u3002")
+        if saved.get("drive_web_view_link"):
+            st.link_button("Drive\u3067\u958b\u304f", saved["drive_web_view_link"])
+        return
+
+    if phase == "not-issued" or result.get("status") == "not_issued":
+        try:
+            storage = drive_storage_from_secrets(st.secrets) if secrets_configured() else None
+            record_not_issued_to_drive(
+                service_id=service_id,
+                target_month=target_month,
+                storage=storage,
+                ledger=ledger(),
+            )
+        except Exception as mark_error:
+            st.error(f"\u672a\u767a\u884c\u306e\u8a18\u9332\u306b\u5931\u6557\u3057\u307e\u3057\u305f: {mark_error}")
+            return
+        st.warning("\u672a\u767a\u884c\u3068\u3057\u3066\u53f0\u5e33\u306b\u8a18\u9332\u3057\u307e\u3057\u305f\u3002")
+        return
+
+    if phase == "action-needed":
+        st.warning(error.get("message") or "\u30ed\u30b0\u30a4\u30f3\u3084\u8a8d\u8a3c\u304c\u5fc5\u8981\u3067\u3059\u3002")
+        if error.get("advice"):
+            st.info(error["advice"])
+        st.info("\u300c\u53d6\u5f97\u7528\u30d6\u30e9\u30a6\u30b6\u300d\u30bf\u30d6\u3067\u753b\u9762\u3092\u64cd\u4f5c\u3057\u3001\u8a8d\u8a3c\u5f8c\u306b\u3082\u3046\u4e00\u5ea6\u53d6\u5f97\u3057\u3066\u304f\u3060\u3055\u3044\u3002")
+        return
+
+    if error:
+        st.error(error.get("message") or "\u53d6\u5f97\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002")
+        if error.get("advice"):
+            st.info(error["advice"])
+        return
+
+    st.error("\u53d6\u5f97\u7d50\u679c\u3092\u5224\u5b9a\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f\u3002")
+
+
+def render_acquisition_form() -> None:
+    st.subheader(TEXT["start"])
+    months = selectable_months()
+    service_ids = [service.id for service in SERVICES]
+    selected_service = st.selectbox(
+        TEXT["service"],
+        service_ids,
+        format_func=lambda value: service_by_id(value).label,
+        key="acq_service",
+    )
+    selected_month = st.selectbox(
+        TEXT["target_month"],
+        months,
+        index=len(months) - 1,
+        format_func=month_label,
+        key="acq_month",
+    )
+    file_format = st.radio("\u5f62\u5f0f", ["pdf", "csv"], index=0, horizontal=True, key="acq_format")
+    force = st.toggle("\u53d6\u5f97\u6e08\u307f\u3067\u3082\u518d\u53d6\u5f97", value=False)
+    if st.button(TEXT["start"], type="primary", use_container_width=True):
+        run_acquisition(selected_service, selected_month, file_format, force)
+
+
+def render_manual_upload() -> None:
+    st.subheader(TEXT["manual"])
+    st.caption(
+        "\u81ea\u52d5\u53d6\u5f97\u304c\u8a8d\u8a3c\u3067\u6b62\u307e\u308b\u5834\u5408\u3067\u3082\u3001"
+        "\u624b\u5143\u306ePDF\u3092\u540c\u3058\u547d\u540d\u898f\u5247\u3067Drive\u306b\u4fdd\u5b58\u3067\u304d\u307e\u3059\u3002"
+    )
+
+    months = selectable_months()
+    service_ids = [service.id for service in SERVICES]
+    left, right = st.columns(2)
+    with left:
+        service_id = st.selectbox(
+            TEXT["service"],
+            service_ids,
+            format_func=lambda value: service_by_id(value).label,
+            key="manual_service",
+        )
+        target_month = st.selectbox(
+            TEXT["target_month"],
+            months,
+            index=len(months) - 1,
+            format_func=month_label,
+            key="manual_month",
+        )
+        transaction_date = st.date_input("\u53d6\u5f15\u65e5 / \u767a\u884c\u65e5", value=date.today())
+    with right:
+        service = service_by_id(service_id)
+        partner_name = st.text_input("\u53d6\u5f15\u5148", value=service.default_partner)
+        amount_yen = st.number_input("\u91d1\u984d\uff08\u5186\uff09", min_value=0, step=1, value=0)
+        source_url = st.text_input("\u53d6\u5f97\u5143URL", value="")
+
+    uploaded_file = st.file_uploader("\u4fdd\u5b58\u3059\u308bPDF/CSV/\u753b\u50cf", type=["pdf", "csv", "png", "jpg", "jpeg"])
+    preview_extension = normalize_extension(uploaded_file.name if uploaded_file else None)
+    metadata = ReceiptMetadata(
+        service_id=service_id,
+        service_label=service_by_id(service_id).label,
+        target_month=target_month,
+        transaction_date=transaction_date,
+        partner_name=partner_name,
+        amount_yen=normalize_amount_yen(amount_yen),
+        source_url=source_url,
+        original_file_name=uploaded_file.name if uploaded_file else "",
+    )
+    preview_name = build_receipt_filename(metadata, preview_extension)
+    st.code(preview_name, language="text")
+
+    cols = st.columns([1, 1, 2])
+    if cols[0].button(TEXT["save_drive"], type="primary", use_container_width=True):
+        if uploaded_file is None:
+            st.error("\u4fdd\u5b58\u3059\u308b\u30d5\u30a1\u30a4\u30eb\u3092\u9078\u629e\u3057\u3066\u304f\u3060\u3055\u3044\u3002")
+            return
+        if amount_yen <= 0:
+            st.error("\u91d1\u984d\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044\u3002")
+            return
+        try:
+            content = uploaded_file.getvalue()
+            storage = drive_storage_from_secrets(st.secrets)
+            result = storage.upload_bytes(
+                file_name=preview_name,
+                content=content,
+                mime_type=_mime_type(preview_extension),
+            )
+            saved = ledger().append_upload(
+                metadata=metadata,
+                file_name=preview_name,
+                drive_file_id=result.id,
+                drive_web_view_link=result.web_view_link,
+                sha256=sha256_bytes(content),
+            )
+            storage.upsert_bytes(
+                file_name="_receipt_index.csv",
+                content=ledger().to_csv_bytes(),
+                mime_type="text/csv",
+            )
+        except Exception as error:
+            st.error(f"Google Drive\u3078\u306e\u4fdd\u5b58\u306b\u5931\u6557\u3057\u307e\u3057\u305f: {error}")
+            return
+        st.success("Google Drive\u3078\u4fdd\u5b58\u3057\u307e\u3057\u305f\u3002")
+        if saved.get("drive_web_view_link"):
+            st.link_button("Drive\u3067\u958b\u304f", saved["drive_web_view_link"])
+
+    if cols[1].button(TEXT["mark_not_issued"], use_container_width=True):
+        try:
+            storage = drive_storage_from_secrets(st.secrets) if secrets_configured() else None
+            record_not_issued_to_drive(
+                service_id=service_id,
+                target_month=target_month,
+                storage=storage,
+                ledger=ledger(),
+            )
+        except Exception as error:
+            st.error(f"\u8a18\u9332\u306b\u5931\u6557\u3057\u307e\u3057\u305f: {error}")
+            return
+        st.success("\u672a\u767a\u884c\u3068\u3057\u3066\u8a18\u9332\u3057\u307e\u3057\u305f\u3002")
+
+
+def render_browser_panel() -> None:
+    st.subheader(TEXT["browser"])
+    service_id = st.selectbox(
+        TEXT["service"],
+        [service.id for service in SERVICES],
+        format_func=lambda value: service_by_id(value).label,
+        key="browser_service",
+    )
+    client = backend_client()
+    cols = st.columns([1, 1, 2])
+    if cols[0].button("\u30d0\u30c3\u30af\u30a8\u30f3\u30c9\u8d77\u52d5", use_container_width=True):
+        try:
+            url = client.ensure_started()
+            st.success(f"Backend: {url}")
+        except BackendError as error:
+            st.error(str(error))
+            return
+    if cols[1].button("\u753b\u9762\u66f4\u65b0", use_container_width=True):
+        refresh_browser_image(client, service_id)
+
+    image_bytes = st.session_state.get("browser_image")
+    if image_bytes:
+        if streamlit_image_coordinates and Image:
+            image = Image.open(BytesIO(image_bytes))
+            coordinates = streamlit_image_coordinates(image, key=f"browser-image:{service_id}")
+            if coordinates:
+                last = st.session_state.get("last_browser_click")
+                point = (int(coordinates["x"]), int(coordinates["y"]))
+                if point != last:
                     try:
                         client.click(service=service_id, x=point[0], y=point[1])
                         st.session_state["last_browser_click"] = point
@@ -240,4 +762,3 @@ with tabs[4]:
     render_history()
 with tabs[5]:
     render_settings()
-
