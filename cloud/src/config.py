@@ -20,13 +20,14 @@ class ServiceDefinition:
     id: str
     label: str
     default_partner: str
+    portal_url: str
 
 
 SERVICES = (
-    ServiceDefinition("epos", "\u5bb6\u8cc3", "\u682a\u5f0f\u4f1a\u793e\u30a8\u30dd\u30b9\u30ab\u30fc\u30c9"),
-    ServiceDefinition("commufa", "Wi-Fi", "\u4e2d\u90e8\u30c6\u30ec\u30b3\u30df\u30e5\u30cb\u30b1\u30fc\u30b7\u30e7\u30f3\u682a\u5f0f\u4f1a\u793e"),
-    ServiceDefinition("tokuten", "\u96fb\u6c17", "\u30d5\u30e9\u30c3\u30c8\u30a8\u30ca\u30b8\u30fc\u682a\u5f0f\u4f1a\u793e"),
-    ServiceDefinition("mobile", "\u643a\u5e2f", "\u682a\u5f0f\u4f1a\u793eNTT\u30c9\u30b3\u30e2"),
+    ServiceDefinition("epos", "\u5bb6\u8cc3", "\u682a\u5f0f\u4f1a\u793e\u30a8\u30dd\u30b9\u30ab\u30fc\u30c9", "https://www.eposcard.co.jp/memberservice/pc/nocardusedetail/menu_preload.do"),
+    ServiceDefinition("commufa", "Wi-Fi", "\u4e2d\u90e8\u30c6\u30ec\u30b3\u30df\u30e5\u30cb\u30b1\u30fc\u30b7\u30e7\u30f3\u682a\u5f0f\u4f1a\u793e", "https://mypage.commufa.jp/join/s/"),
+    ServiceDefinition("tokuten", "\u96fb\u6c17", "\u30d5\u30e9\u30c3\u30c8\u30a8\u30ca\u30b8\u30fc\u682a\u5f0f\u4f1a\u793e", "https://outlook.live.com/mail/0/"),
+    ServiceDefinition("mobile", "\u643a\u5e2f", "\u682a\u5f0f\u4f1a\u793eNTT\u30c9\u30b3\u30e2", "https://webbilling.ntt-finance.co.jp/mem/b0201/init"),
 )
 
 
@@ -70,4 +71,3 @@ def selectable_months(today: date | None = None) -> list[str]:
         months.append(month_key(year, month))
         year, month = shift_month(year, month, 1)
     return months
-
