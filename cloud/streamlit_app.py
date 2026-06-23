@@ -1,23 +1,18 @@
 from __future__ import annotations
 
 from datetime import date
-from io import BytesIO
-import time
 
 import streamlit as st
 
-from src.backend_client import BackendClient, BackendError
 from src.config import (
     LEDGER_PATH,
     RECEIPT_DRIVE_FOLDER_ID,
     RECEIPT_DRIVE_FOLDER_URL,
     SERVICES,
     month_label,
-    parse_month_key,
     selectable_months,
     service_by_id,
 )
-from src.drive_storage import DriveConfigError
 from src.ledger import ReceiptLedger
 from src.naming import (
     ReceiptMetadata,
@@ -29,16 +24,7 @@ from src.naming import (
 from src.receipt_pipeline import (
     drive_storage_from_secrets,
     record_not_issued_to_drive,
-    upload_backend_record_to_drive,
 )
-
-
-try:
-    from PIL import Image
-    from streamlit_image_coordinates import streamlit_image_coordinates
-except Exception:
-    Image = None
-    streamlit_image_coordinates = None
 
 
 st.set_page_config(
@@ -53,7 +39,6 @@ TEXT = {
     "dashboard": "\u53d6\u5f97\u72b6\u6cc1",
     "manual": "\u624b\u52d5\u767b\u9332",
     "ledger": "\u4fdd\u5b58\u53f0\u5e33",
-    "browser": "\u53d6\u5f97\u7528\u30d6\u30e9\u30a6\u30b6",
     "settings": "\u8a2d\u5b9a",
     "target_month": "\u5bfe\u8c61\u6708",
     "service": "\u30b5\u30fc\u30d3\u30b9",
@@ -130,7 +115,7 @@ def inject_design() -> None:
           margin-bottom: .25rem !important;
           letter-spacing: 0;
           font-family: "Inter", "Noto Sans JP", system-ui, sans-serif;
-          font-size: clamp(2.25rem, 6vw, 4.2rem) !important;
+          font-size: 3.4rem !important;
           font-weight: 800 !important;
           line-height: .95 !important;
           color: var(--gr-text);
@@ -360,11 +345,6 @@ def inject_design() -> None:
     )
 
 
-@st.cache_resource
-def backend_client() -> BackendClient:
-    return BackendClient()
-
-
 def ledger() -> ReceiptLedger:
     return ReceiptLedger(LEDGER_PATH)
 
@@ -413,97 +393,19 @@ def render_dashboard() -> None:
             record = latest.get((target_month, service.id))
             label = status_text(record)
             if row[index].button(label, key=f"run:{target_month}:{service.id}", use_container_width=True):
-                run_acquisition(service.id, target_month, "pdf", force=False)
+                select_for_acquisition(service.id, target_month)
+                st.success(
+                    f"{service.label} / {month_label(target_month)}\u3092\u9078\u629e\u3057\u307e\u3057\u305f\u3002"
+                    "\u300c\u53d6\u5f97\u958b\u59cb\u300d\u3067\u516c\u5f0f\u30b5\u30a4\u30c8\u3092\u958b\u3044\u3066\u304f\u3060\u3055\u3044\u3002"
+                )
 
 
-def run_acquisition(service_id: str, target_month: str, file_format: str, force: bool) -> None:
-    if not secrets_configured():
-        st.error("Google Drive\u7528\u306eSecrets\u304c\u672a\u8a2d\u5b9a\u3067\u3059\u3002\u5148\u306b\u8a2d\u5b9a\u3057\u3066\u304f\u3060\u3055\u3044\u3002")
-        return
-
-    year, month = parse_month_key(target_month)
-    status = st.empty()
-    progress = st.progress(0)
-    client = backend_client()
-
-    try:
-        client.ensure_started()
-        client.start_download(service=service_id, year=year, month=month, file_format=file_format, force=force)
-    except BackendError as error:
-        st.error(str(error))
-        return
-
-    deadline = time.time() + 240
-    task = {}
-    while time.time() < deadline:
-        try:
-            state = client.state()
-        except BackendError as error:
-            st.error(str(error))
-            return
-        task = state.get("task") or {}
-        message = task.get("message") or "\u53d6\u5f97\u51e6\u7406\u4e2d\u3067\u3059\u3002"
-        status.info(message)
-        elapsed = min(0.95, max(0.05, (time.time() - (deadline - 240)) / 240))
-        progress.progress(elapsed)
-        if not task.get("running"):
-            break
-        time.sleep(1.5)
-
-    progress.progress(1.0)
-    handle_finished_task(service_id, target_month, task)
-
-
-def handle_finished_task(service_id: str, target_month: str, task: dict) -> None:
-    phase = task.get("phase")
-    result = task.get("lastResult") or {}
-    error = task.get("error") or {}
-
-    if phase == "done" and result.get("record"):
-        try:
-            storage = drive_storage_from_secrets(st.secrets)
-            saved = upload_backend_record_to_drive(
-                record=result["record"],
-                storage=storage,
-                ledger=ledger(),
-            )
-        except (DriveConfigError, BackendError, Exception) as upload_error:
-            st.error(f"Google Drive\u3078\u306e\u4fdd\u5b58\u306b\u5931\u6557\u3057\u307e\u3057\u305f: {upload_error}")
-            return
-        st.success("Google Drive\u3078\u4fdd\u5b58\u3057\u3001\u53f0\u5e33\u3092\u66f4\u65b0\u3057\u307e\u3057\u305f\u3002")
-        if saved.get("drive_web_view_link"):
-            st.link_button("Drive\u3067\u958b\u304f", saved["drive_web_view_link"])
-        return
-
-    if phase == "not-issued" or result.get("status") == "not_issued":
-        try:
-            storage = drive_storage_from_secrets(st.secrets) if secrets_configured() else None
-            record_not_issued_to_drive(
-                service_id=service_id,
-                target_month=target_month,
-                storage=storage,
-                ledger=ledger(),
-            )
-        except Exception as mark_error:
-            st.error(f"\u672a\u767a\u884c\u306e\u8a18\u9332\u306b\u5931\u6557\u3057\u307e\u3057\u305f: {mark_error}")
-            return
-        st.warning("\u672a\u767a\u884c\u3068\u3057\u3066\u53f0\u5e33\u306b\u8a18\u9332\u3057\u307e\u3057\u305f\u3002")
-        return
-
-    if phase == "action-needed":
-        st.warning(error.get("message") or "\u30ed\u30b0\u30a4\u30f3\u3084\u8a8d\u8a3c\u304c\u5fc5\u8981\u3067\u3059\u3002")
-        if error.get("advice"):
-            st.info(error["advice"])
-        st.info("\u300c\u53d6\u5f97\u7528\u30d6\u30e9\u30a6\u30b6\u300d\u30bf\u30d6\u3067\u753b\u9762\u3092\u64cd\u4f5c\u3057\u3001\u8a8d\u8a3c\u5f8c\u306b\u3082\u3046\u4e00\u5ea6\u53d6\u5f97\u3057\u3066\u304f\u3060\u3055\u3044\u3002")
-        return
-
-    if error:
-        st.error(error.get("message") or "\u53d6\u5f97\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002")
-        if error.get("advice"):
-            st.info(error["advice"])
-        return
-
-    st.error("\u53d6\u5f97\u7d50\u679c\u3092\u5224\u5b9a\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f\u3002")
+def select_for_acquisition(service_id: str, target_month: str) -> None:
+    """Keep the chosen receipt context while the user moves between tabs."""
+    st.session_state["acq_service"] = service_id
+    st.session_state["acq_month"] = target_month
+    st.session_state["manual_service"] = service_id
+    st.session_state["manual_month"] = target_month
 
 
 def render_acquisition_form() -> None:
@@ -523,17 +425,19 @@ def render_acquisition_form() -> None:
         format_func=month_label,
         key="acq_month",
     )
-    file_format = st.radio("\u5f62\u5f0f", ["pdf", "csv"], index=0, horizontal=True, key="acq_format")
-    force = st.toggle("\u53d6\u5f97\u6e08\u307f\u3067\u3082\u518d\u53d6\u5f97", value=False)
-    if st.button(TEXT["start"], type="primary", use_container_width=True):
-        run_acquisition(selected_service, selected_month, file_format, force)
+    service = service_by_id(selected_service)
+    st.link_button(f"{service.label}\u306e\u516c\u5f0f\u30b5\u30a4\u30c8\u3092\u958b\u304f", service.portal_url, type="primary", use_container_width=True)
+    st.info(
+        f"{month_label(selected_month)}\u306e\u9818\u53ce\u66f8\u30fb\u660e\u7d30\u3092\u30c0\u30a6\u30f3\u30ed\u30fc\u30c9\u5f8c\u3001"
+        "\u300c\u624b\u52d5\u767b\u9332\u300d\u3067Google Drive\u3078\u4fdd\u5b58\u3057\u307e\u3059\u3002"
+    )
 
 
 def render_manual_upload() -> None:
     st.subheader(TEXT["manual"])
     st.caption(
-        "\u81ea\u52d5\u53d6\u5f97\u304c\u8a8d\u8a3c\u3067\u6b62\u307e\u308b\u5834\u5408\u3067\u3082\u3001"
-        "\u624b\u5143\u306ePDF\u3092\u540c\u3058\u547d\u540d\u898f\u5247\u3067Drive\u306b\u4fdd\u5b58\u3067\u304d\u307e\u3059\u3002"
+        "iPhone\u306b\u30c0\u30a6\u30f3\u30ed\u30fc\u30c9\u3057\u305f\u9818\u53ce\u66f8\u30fb\u660e\u7d30\u3092\u3001"
+        "\u6b63\u3057\u3044\u540d\u524d\u3067Google Drive\u306b\u4fdd\u5b58\u3057\u307e\u3059\u3002"
     )
 
     months = selectable_months()
@@ -625,79 +529,6 @@ def render_manual_upload() -> None:
         st.success("\u672a\u767a\u884c\u3068\u3057\u3066\u8a18\u9332\u3057\u307e\u3057\u305f\u3002")
 
 
-def render_browser_panel() -> None:
-    st.subheader(TEXT["browser"])
-    service_id = st.selectbox(
-        TEXT["service"],
-        [service.id for service in SERVICES],
-        format_func=lambda value: service_by_id(value).label,
-        key="browser_service",
-    )
-    client = backend_client()
-    cols = st.columns([1, 1, 2])
-    if cols[0].button("\u30d0\u30c3\u30af\u30a8\u30f3\u30c9\u8d77\u52d5", use_container_width=True):
-        try:
-            url = client.ensure_started()
-            st.success(f"Backend: {url}")
-        except BackendError as error:
-            st.error(str(error))
-            return
-    if cols[1].button("\u753b\u9762\u66f4\u65b0", use_container_width=True):
-        refresh_browser_image(client, service_id)
-
-    image_bytes = st.session_state.get("browser_image")
-    if image_bytes:
-        if streamlit_image_coordinates and Image:
-            image = Image.open(BytesIO(image_bytes))
-            coordinates = streamlit_image_coordinates(image, key=f"browser-image:{service_id}")
-            if coordinates:
-                last = st.session_state.get("last_browser_click")
-                point = (int(coordinates["x"]), int(coordinates["y"]))
-                if point != last:
-                    try:
-                        client.click(service=service_id, x=point[0], y=point[1])
-                        st.session_state["last_browser_click"] = point
-                        time.sleep(0.5)
-                        refresh_browser_image(client, service_id)
-                    except BackendError as error:
-                        st.error(str(error))
-        else:
-            st.image(image_bytes)
-            st.info("streamlit-image-coordinates\u304c\u672a\u30a4\u30f3\u30b9\u30c8\u30fc\u30eb\u306e\u305f\u3081\u3001\u5ea7\u6a19\u5165\u529b\u3067\u64cd\u4f5c\u3057\u307e\u3059\u3002")
-
-    click_cols = st.columns([1, 1, 1])
-    x = click_cols[0].number_input("X", min_value=0, value=0, step=1)
-    y = click_cols[1].number_input("Y", min_value=0, value=0, step=1)
-    if click_cols[2].button("\u5ea7\u6a19\u3092\u30af\u30ea\u30c3\u30af", use_container_width=True):
-        try:
-            client.click(service=service_id, x=int(x), y=int(y))
-            refresh_browser_image(client, service_id)
-        except BackendError as error:
-            st.error(str(error))
-
-    text = st.text_input("\u30c6\u30ad\u30b9\u30c8\u5165\u529b", type="password")
-    input_cols = st.columns([1, 1, 2])
-    if input_cols[0].button("\u5165\u529b", use_container_width=True):
-        try:
-            client.text(service=service_id, text=text)
-            refresh_browser_image(client, service_id)
-        except BackendError as error:
-            st.error(str(error))
-    if input_cols[1].button("Enter", use_container_width=True):
-        try:
-            client.key(service=service_id, key="Enter")
-            refresh_browser_image(client, service_id)
-        except BackendError as error:
-            st.error(str(error))
-
-
-def refresh_browser_image(client: BackendClient, service_id: str) -> None:
-    try:
-        st.session_state["browser_image"] = client.screenshot(service=service_id)
-    except BackendError as error:
-        st.warning(str(error))
-
-
 def render_history() -> None:
     st.subheader(TEXT["ledger"])
     records = ledger().read()
@@ -723,15 +554,7 @@ def render_settings() -> None:
         st.success("Google Drive\u7528\u306eStreamlit Secrets\u304c\u8a2d\u5b9a\u3055\u308c\u3066\u3044\u307e\u3059\u3002")
     else:
         st.warning("Google Drive\u7528\u306eStreamlit Secrets\u304c\u672a\u8a2d\u5b9a\u3067\u3059\u3002")
-
-    try:
-        url = backend_client().ensure_started()
-        st.success(f"Node backend: {url}")
-    except BackendError as error:
-        st.warning(f"Node backend: {error}")
-
-    st.write("\u53f0\u5e33\u30d5\u30a1\u30a4\u30eb")
-    st.code(str(LEDGER_PATH), language="text")
+    st.caption("\u4fdd\u5b58\u53f0\u5e33\u306fGoogle Drive\u306e `_receipt_index.csv` \u306b\u3082\u540c\u671f\u3055\u308c\u307e\u3059\u3002")
 
 
 def _mime_type(extension: str) -> str:
@@ -749,7 +572,7 @@ inject_design()
 st.title(TEXT["title"])
 st.caption(TEXT["caption"])
 
-tabs = st.tabs([TEXT["dashboard"], TEXT["start"], TEXT["manual"], TEXT["browser"], TEXT["ledger"], TEXT["settings"]])
+tabs = st.tabs([TEXT["dashboard"], TEXT["start"], TEXT["manual"], TEXT["ledger"], TEXT["settings"]])
 with tabs[0]:
     render_dashboard()
 with tabs[1]:
@@ -757,8 +580,6 @@ with tabs[1]:
 with tabs[2]:
     render_manual_upload()
 with tabs[3]:
-    render_browser_panel()
-with tabs[4]:
     render_history()
-with tabs[5]:
+with tabs[4]:
     render_settings()
