@@ -35,20 +35,18 @@ st.set_page_config(
 
 TEXT = {
     "title": "GetReceipt",
-    "caption": "iPhone\u304b\u3089PC\u3092\u8d77\u52d5\u305b\u305a\u306b\u3001\u9818\u53ce\u66f8\u30fb\u660e\u7d30\u3092Google Drive\u3078\u4fdd\u5b58\u3059\u308b\u30af\u30e9\u30a6\u30c9\u7248\u3067\u3059\u3002",
-    "dashboard": "\u53d6\u5f97\u72b6\u6cc1",
-    "manual": "\u624b\u52d5\u767b\u9332",
-    "ledger": "\u4fdd\u5b58\u53f0\u5e33",
-    "settings": "\u8a2d\u5b9a",
-    "target_month": "\u5bfe\u8c61\u6708",
-    "service": "\u30b5\u30fc\u30d3\u30b9",
-    "unfetched": "\u672a\u53d6\u5f97",
-    "uploaded": "\u53d6\u5f97\u6e08",
-    "not_issued": "\u672a\u767a\u884c",
-    "action_needed": "\u8981\u5bfe\u5fdc",
-    "start": "\u53d6\u5f97\u958b\u59cb",
-    "save_drive": "Drive\u3078\u4fdd\u5b58",
-    "mark_not_issued": "\u672a\u767a\u884c\u3068\u3057\u3066\u8a18\u9332",
+    "dashboard": "取得状況",
+    "manual": "手動登録",
+    "ledger": "保存台帳",
+    "settings": "設定",
+    "target_month": "対象月",
+    "service": "サービス",
+    "unfetched": "未取得",
+    "uploaded": "取得済",
+    "not_issued": "未発行",
+    "start": "取得開始",
+    "save_drive": "Driveへ保存",
+    "mark_not_issued": "未発行として記録",
 }
 
 
@@ -56,23 +54,23 @@ def inject_design() -> None:
     st.markdown(
         """
         <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@500;600&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700;800&family=IBM+Plex+Mono:wght@500;600;700&family=Zen+Kaku+Gothic+New:wght@400;500;700;900&display=swap');
 
         :root {
-          --gr-bg: #f6f8fc;
+          --gr-paper: #f8f7f3;
+          --gr-paper-2: #eeeee7;
           --gr-surface: #ffffff;
-          --gr-surface-raised: #fbfdff;
-          --gr-text: #172033;
-          --gr-muted: #667085;
-          --gr-faint: #dbe3ef;
-          --gr-accent: #2563eb;
-          --gr-accent-2: #0f9f8e;
-          --gr-warning: #d98a11;
-          --gr-success: #198754;
-          --gr-radius: 8px;
-          --gr-shadow: 0 10px 30px rgba(18, 32, 56, 0.08);
-          --gr-shadow-soft: 0 4px 14px rgba(18, 32, 56, 0.06);
-          --gr-ease: cubic-bezier(.2, .8, .2, 1);
+          --gr-ink: #24231f;
+          --gr-muted: #6e7069;
+          --gr-line: #d8d9cf;
+          --gr-blue: #2864f0;
+          --gr-blue-dark: #193f9e;
+          --gr-red: #ff5c3f;
+          --gr-green: #18856f;
+          --gr-amber: #d99a18;
+          --gr-shadow: 0 18px 45px rgba(36, 35, 31, .10);
+          --gr-radius: 18px;
+          --gr-ease: cubic-bezier(.2, .75, .2, 1);
         }
 
         html {
@@ -82,173 +80,353 @@ def inject_design() -> None:
 
         body,
         .stApp {
-          font-family: "Inter", "Noto Sans JP", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-          color: var(--gr-text);
+          color: var(--gr-ink);
+          font-family: "Zen Kaku Gothic New", system-ui, sans-serif;
           background:
-            radial-gradient(circle at 12% 0%, rgba(37, 99, 235, 0.08), transparent 32rem),
-            radial-gradient(circle at 92% 8%, rgba(15, 159, 142, 0.08), transparent 28rem),
-            linear-gradient(180deg, #fbfdff 0%, var(--gr-bg) 24rem);
+            radial-gradient(circle at 12% 10%, rgba(40, 100, 240, .16), transparent 26rem),
+            radial-gradient(circle at 88% 8%, rgba(255, 92, 63, .14), transparent 24rem),
+            linear-gradient(90deg, rgba(36, 35, 31, .055) 1px, transparent 1px),
+            linear-gradient(180deg, rgba(36, 35, 31, .045) 1px, transparent 1px),
+            var(--gr-paper);
+          background-size: auto, auto, 34px 34px, 34px 34px, auto;
         }
 
         [data-testid="stHeader"] {
-          background: rgba(246, 248, 252, 0.72);
-          backdrop-filter: blur(18px);
-          border-bottom: 1px solid rgba(219, 227, 239, 0.72);
+          background: rgba(248, 247, 243, .84);
+          border-bottom: 1px solid var(--gr-line);
+          backdrop-filter: blur(16px);
+        }
+
+        [data-testid="stToolbar"] {
+          right: 1rem;
         }
 
         .block-container {
-          max-width: 1180px;
-          padding: 2.4rem 1.35rem 4rem;
+          max-width: 1240px;
+          padding: 1.65rem 1.25rem 4rem;
         }
 
-        .block-container > div {
-          animation: gr-rise .52s var(--gr-ease) both;
-        }
-
-        .block-container > div:nth-child(2) { animation-delay: .05s; }
-        .block-container > div:nth-child(3) { animation-delay: .1s; }
-        .block-container > div:nth-child(4) { animation-delay: .15s; }
-
-        h1 {
+        .gr-hero {
           position: relative;
-          width: fit-content;
-          margin-bottom: .25rem !important;
-          letter-spacing: 0;
-          font-family: "Inter", "Noto Sans JP", system-ui, sans-serif;
-          font-size: 3.4rem !important;
-          font-weight: 800 !important;
-          line-height: .95 !important;
-          color: var(--gr-text);
+          display: grid;
+          grid-template-columns: minmax(0, 1.05fr) minmax(330px, .95fr);
+          gap: 1rem;
+          overflow: hidden;
+          border: 1px solid var(--gr-ink);
+          border-radius: calc(var(--gr-radius) + 8px);
+          background: var(--gr-ink);
+          box-shadow: 10px 10px 0 rgba(40, 100, 240, .20), var(--gr-shadow);
+          animation: gr-rise .48s var(--gr-ease) both;
         }
 
-        h1::after {
+        .gr-hero::before {
           content: "";
-          display: block;
-          width: min(68vw, 520px);
-          height: 4px;
-          margin-top: 1rem;
-          border-radius: 999px;
-          background: linear-gradient(90deg, var(--gr-accent), var(--gr-accent-2), #91b7ff, var(--gr-accent));
-          background-size: 220% 100%;
-          animation: gr-rail 5.5s linear infinite;
-          box-shadow: 0 8px 24px rgba(37, 99, 235, 0.18);
+          position: absolute;
+          inset: 0;
+          pointer-events: none;
+          background:
+            linear-gradient(90deg, rgba(255,255,255,.08) 1px, transparent 1px),
+            linear-gradient(180deg, rgba(255,255,255,.07) 1px, transparent 1px);
+          background-size: 28px 28px;
+          mask-image: linear-gradient(90deg, rgba(0,0,0,.9), rgba(0,0,0,.2));
         }
 
-        h2, h3, [data-testid="stMarkdownContainer"] strong {
-          letter-spacing: 0;
+        .gr-hero-title,
+        .gr-status-board {
+          position: relative;
+          z-index: 1;
         }
 
-        [data-testid="stCaptionContainer"] {
-          max-width: 720px;
-          color: var(--gr-muted);
-          font-size: 1.02rem;
+        .gr-hero-title {
+          padding: 2rem 2rem 1.7rem;
+          color: #fffdf5;
+        }
+
+        .gr-eyebrow,
+        .gr-section-eyebrow,
+        .gr-flow span,
+        .gr-card span,
+        .gr-status-key span,
+        .gr-month-cell {
+          font-family: "IBM Plex Mono", ui-monospace, monospace;
+        }
+
+        .gr-eyebrow {
+          display: inline-flex;
+          align-items: center;
+          gap: .55rem;
+          margin: 0 0 1rem;
+          color: #fff7dc;
+          font-size: .78rem;
+          font-weight: 700;
+          letter-spacing: .12em;
+          text-transform: uppercase;
+        }
+
+        .gr-eyebrow::before {
+          content: "";
+          width: .72rem;
+          height: .72rem;
+          border-radius: 50%;
+          background: var(--gr-red);
+          box-shadow: 1.1rem 0 0 var(--gr-amber), 2.2rem 0 0 var(--gr-green);
+        }
+
+        .gr-hero h1 {
+          margin: 0 !important;
+          color: #fffdf5;
+          font-family: "Bricolage Grotesque", "Zen Kaku Gothic New", sans-serif;
+          font-size: clamp(3.1rem, 8vw, 6.9rem) !important;
+          font-weight: 800 !important;
+          letter-spacing: -.07em;
+          line-height: .78 !important;
+        }
+
+        .gr-hero-note {
+          max-width: 42rem;
+          margin: 1.25rem 0 0;
+          color: rgba(255, 253, 245, .76);
+          font-size: 1rem;
           line-height: 1.8;
         }
 
-        [data-testid="stVerticalBlock"] > [style*="flex-direction: column;"] > [data-testid="stVerticalBlock"] {
-          gap: .85rem;
+        .gr-status-board {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: .65rem;
+          padding: 1rem;
+          background:
+            linear-gradient(135deg, rgba(255,255,255,.92), rgba(255,255,255,.72)),
+            var(--gr-surface);
+        }
+
+        .gr-card {
+          display: grid;
+          align-content: space-between;
+          min-height: 8.4rem;
+          padding: 1rem;
+          border: 1px solid rgba(36, 35, 31, .22);
+          border-radius: 16px;
+          background: rgba(255,255,255,.82);
+        }
+
+        .gr-card span {
+          color: var(--gr-muted);
+          font-size: .72rem;
+          font-weight: 700;
+          letter-spacing: .07em;
+        }
+
+        .gr-card strong {
+          margin-top: .7rem;
+          color: var(--gr-ink);
+          font-family: "Bricolage Grotesque", "Zen Kaku Gothic New", sans-serif;
+          font-size: clamp(1.75rem, 4vw, 3.15rem);
+          font-weight: 800;
+          letter-spacing: -.05em;
+          line-height: .92;
+        }
+
+        .gr-card small {
+          color: var(--gr-muted);
+          font-size: .76rem;
+        }
+
+        .gr-card.is-blue { border-top: 7px solid var(--gr-blue); }
+        .gr-card.is-red { border-top: 7px solid var(--gr-red); }
+        .gr-card.is-green { border-top: 7px solid var(--gr-green); }
+        .gr-card.is-amber { border-top: 7px solid var(--gr-amber); }
+
+        .gr-flow {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: .55rem;
+          margin: 1rem 0 1.2rem;
+          padding: 0;
+          list-style: none;
+          animation: gr-rise .46s .08s var(--gr-ease) both;
+        }
+
+        .gr-flow li {
+          position: relative;
+          min-height: 4.7rem;
+          padding: .8rem .9rem .85rem;
+          border: 1px solid var(--gr-ink);
+          border-radius: 16px;
+          background: var(--gr-surface);
+          box-shadow: 4px 4px 0 rgba(36, 35, 31, .08);
+        }
+
+        .gr-flow li::after {
+          content: "";
+          position: absolute;
+          right: .85rem;
+          bottom: .75rem;
+          width: 3rem;
+          height: 1.25rem;
+          background: repeating-linear-gradient(90deg, var(--gr-ink) 0 2px, transparent 2px 5px);
+          opacity: .22;
+        }
+
+        .gr-flow b {
+          display: block;
+          color: var(--gr-blue);
+          font-family: "Bricolage Grotesque", sans-serif;
+          font-size: 1.1rem;
+          line-height: 1;
+        }
+
+        .gr-flow span {
+          display: block;
+          margin-top: .45rem;
+          color: var(--gr-ink);
+          font-size: .86rem;
+          font-weight: 700;
+          letter-spacing: 0;
         }
 
         div[data-testid="stTabs"] {
-          margin-top: 1.4rem;
+          margin-top: .2rem;
+          animation: gr-rise .46s .14s var(--gr-ease) both;
         }
 
         div[data-testid="stTabs"] [role="tablist"] {
-          gap: .35rem;
-          padding: .35rem;
-          width: fit-content;
-          max-width: 100%;
+          gap: .45rem;
+          padding: .4rem;
           overflow-x: auto;
-          border: 1px solid rgba(219, 227, 239, .9);
-          border-radius: var(--gr-radius);
-          background: rgba(255, 255, 255, .78);
-          box-shadow: var(--gr-shadow-soft);
+          border: 1px solid var(--gr-ink);
+          border-radius: 999px;
+          background: rgba(255,255,255,.82);
+          box-shadow: 5px 5px 0 rgba(36, 35, 31, .08);
         }
 
         div[data-testid="stTabs"] button[role="tab"] {
-          min-height: 2.45rem;
-          padding: .45rem .85rem;
-          border-radius: 7px;
+          min-height: 2.7rem;
+          padding: .55rem 1rem;
+          border-radius: 999px;
           color: var(--gr-muted);
-          font-weight: 700;
-          transition: color .2s ease, background .2s ease, box-shadow .2s ease;
+          font-weight: 800;
         }
 
         div[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
-          color: var(--gr-text);
-          background: #eef4ff;
-          box-shadow: inset 0 0 0 1px rgba(37, 99, 235, .16);
+          background: var(--gr-ink);
+          color: #fffdf5;
         }
 
-        div[data-testid="stTabs"] button[role="tab"] p {
-          font-size: .92rem;
+        div[data-testid="stTabs"] button[role="tab"][aria-selected="true"] p {
+          color: #fffdf5;
         }
 
-        [data-testid="stVerticalBlockBorderWrapper"],
-        [data-testid="stForm"],
-        [data-testid="stFileUploader"],
-        div[data-testid="stDataFrame"],
-        div[data-testid="stAlert"] {
-          border-radius: var(--gr-radius) !important;
+        .gr-section-heading {
+          display: grid;
+          gap: .35rem;
+          margin: 2rem 0 1rem;
         }
 
-        div[data-testid="stDataFrame"] {
-          overflow: hidden;
-          border: 1px solid rgba(219, 227, 239, .9);
-          box-shadow: var(--gr-shadow-soft);
+        .gr-section-eyebrow {
+          margin: 0;
+          color: var(--gr-blue);
+          font-size: .74rem;
+          font-weight: 700;
+          letter-spacing: .12em;
         }
 
-        [data-testid="stMetric"] {
-          padding: 1rem;
-          border: 1px solid rgba(219, 227, 239, .9);
-          border-radius: var(--gr-radius);
-          background: var(--gr-surface);
-          box-shadow: var(--gr-shadow-soft);
+        .gr-section-heading h2 {
+          margin: 0;
+          color: var(--gr-ink);
+          font-family: "Bricolage Grotesque", "Zen Kaku Gothic New", sans-serif;
+          font-size: clamp(1.7rem, 3vw, 2.4rem);
+          font-weight: 800;
+          letter-spacing: -.04em;
+        }
+
+        .gr-section-heading p:last-child {
+          margin: 0;
+          color: var(--gr-muted);
+          font-size: .95rem;
+          line-height: 1.65;
+        }
+
+        .gr-status-key {
+          display: flex;
+          flex-wrap: wrap;
+          gap: .55rem;
+          margin: .2rem 0 1rem;
+        }
+
+        .gr-status-key span {
+          display: inline-flex;
+          align-items: center;
+          gap: .45rem;
+          min-height: 2.1rem;
+          padding: .25rem .65rem;
+          border: 1px solid var(--gr-line);
+          border-radius: 999px;
+          background: rgba(255,255,255,.82);
+          color: var(--gr-muted);
+          font-size: .78rem;
+          font-weight: 700;
+        }
+
+        .gr-status-key i {
+          display: inline-block;
+          width: .62rem;
+          height: .62rem;
+          border-radius: 50%;
+        }
+
+        .gr-status-key .is-open i { background: var(--gr-blue); }
+        .gr-status-key .is-done i { background: var(--gr-green); }
+        .gr-status-key .is-none i { background: var(--gr-amber); }
+
+        .gr-month-cell {
+          display: flex;
+          min-height: 44px;
+          align-items: center;
+          color: var(--gr-ink);
+          font-size: .86rem;
+          font-weight: 700;
+        }
+
+        [data-testid="stHorizontalBlock"] {
+          gap: .75rem;
         }
 
         .stButton > button,
         .stDownloadButton > button,
-        a[data-testid="stLinkButton"] {
-          border-radius: var(--gr-radius) !important;
-          border: 1px solid rgba(37, 99, 235, .14) !important;
-          background: linear-gradient(180deg, #ffffff 0%, #f6f9ff 100%) !important;
-          color: var(--gr-text) !important;
-          font-weight: 700 !important;
-          letter-spacing: 0 !important;
-          box-shadow: 0 1px 0 rgba(255, 255, 255, .9) inset, var(--gr-shadow-soft);
-          transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease, background .2s ease;
+        [data-testid="stLinkButton"] > a {
+          min-height: 44px;
+          border: 1px solid var(--gr-ink) !important;
+          border-radius: 14px !important;
+          background: var(--gr-surface) !important;
+          color: var(--gr-ink) !important;
+          font-weight: 800 !important;
+          box-shadow: 3px 3px 0 rgba(36, 35, 31, .10) !important;
+          transition: transform .18s var(--gr-ease), box-shadow .18s var(--gr-ease), background .18s var(--gr-ease), color .18s var(--gr-ease);
         }
 
         .stButton > button:hover,
         .stDownloadButton > button:hover,
-        a[data-testid="stLinkButton"]:hover {
-          transform: translateY(-1px);
-          border-color: rgba(37, 99, 235, .38) !important;
-          box-shadow: 0 12px 28px rgba(37, 99, 235, .12);
-        }
-
-        .stButton > button:active,
-        .stDownloadButton > button:active,
-        a[data-testid="stLinkButton"]:active {
-          transform: translateY(0) scale(.99);
+        [data-testid="stLinkButton"] > a:hover {
+          background: #edf2ff !important;
+          color: var(--gr-blue-dark) !important;
+          transform: translate(-1px, -1px);
+          box-shadow: 5px 5px 0 rgba(40, 100, 240, .18) !important;
         }
 
         .stButton > button[kind="primary"],
-        .stButton > button[data-testid="baseButton-primary"] {
-          background: linear-gradient(135deg, var(--gr-accent), #174ccf) !important;
+        .stButton > button[data-testid="baseButton-primary"],
+        [data-testid="stLinkButton"] > a[kind="primary"] {
+          background: var(--gr-blue) !important;
           color: #ffffff !important;
-          border-color: rgba(37, 99, 235, .8) !important;
-          box-shadow: 0 16px 30px rgba(37, 99, 235, .22);
+          border-color: var(--gr-blue-dark) !important;
         }
 
-        .stButton > button:focus-visible,
-        .stDownloadButton > button:focus-visible,
-        a[data-testid="stLinkButton"]:focus-visible,
-        input:focus-visible,
-        textarea:focus-visible,
-        [role="tab"]:focus-visible {
-          outline: 3px solid rgba(37, 99, 235, .32) !important;
-          outline-offset: 2px !important;
+        .stButton > button[kind="primary"]:hover,
+        .stButton > button[data-testid="baseButton-primary"]:hover,
+        [data-testid="stLinkButton"] > a[kind="primary"]:hover {
+          background: var(--gr-blue-dark) !important;
+          color: #ffffff !important;
         }
 
         [data-testid="stTextInput"] input,
@@ -256,83 +434,83 @@ def inject_design() -> None:
         [data-testid="stDateInput"] input,
         [data-baseweb="select"] > div,
         [data-testid="stFileUploader"] section {
-          border-radius: var(--gr-radius) !important;
-          border-color: rgba(219, 227, 239, .95) !important;
-          background: rgba(255, 255, 255, .9) !important;
-          box-shadow: 0 1px 0 rgba(255,255,255,.7) inset;
+          min-height: 44px;
+          border-color: var(--gr-ink) !important;
+          border-radius: 14px !important;
+          background: rgba(255,255,255,.9) !important;
+          color: var(--gr-ink) !important;
+          box-shadow: 3px 3px 0 rgba(36, 35, 31, .07) !important;
         }
 
         [data-testid="stTextInput"] label,
         [data-testid="stNumberInput"] label,
         [data-testid="stDateInput"] label,
         [data-testid="stSelectbox"] label,
-        [data-testid="stRadio"] label,
         [data-testid="stFileUploader"] label {
           color: var(--gr-muted) !important;
-          font-size: .82rem !important;
-          font-weight: 800 !important;
-          text-transform: uppercase;
-          letter-spacing: .08em;
+          font-family: "IBM Plex Mono", ui-monospace, monospace;
+          font-size: .78rem !important;
+          font-weight: 700 !important;
+        }
+
+        [data-testid="stFileUploader"] section {
+          border-style: dashed !important;
+          border-width: 2px !important;
         }
 
         code,
         pre,
         [data-testid="stCodeBlock"] {
-          font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace !important;
-          border-radius: var(--gr-radius) !important;
+          font-family: "IBM Plex Mono", ui-monospace, monospace !important;
         }
 
-        [data-testid="stProgress"] > div > div > div {
-          background: linear-gradient(90deg, var(--gr-accent), var(--gr-accent-2)) !important;
+        [data-testid="stCodeBlock"],
+        div[data-testid="stAlert"],
+        div[data-testid="stDataFrame"] {
+          overflow: hidden;
+          border: 1px solid var(--gr-ink);
+          border-radius: 16px !important;
+          background: rgba(255,255,255,.9) !important;
+          box-shadow: 4px 4px 0 rgba(36, 35, 31, .08);
         }
 
-        [data-testid="stSpinner"] {
-          color: var(--gr-accent) !important;
+        div[data-testid="stDataFrame"] [role="columnheader"] {
+          background: var(--gr-paper-2);
+          color: var(--gr-ink);
         }
 
-        div[data-testid="stAlert"] {
-          border: 1px solid rgba(219, 227, 239, .9);
-          box-shadow: var(--gr-shadow-soft);
-        }
-
-        [data-testid="stImage"] img {
-          border-radius: var(--gr-radius);
-          border: 1px solid rgba(219, 227, 239, .9);
-          box-shadow: var(--gr-shadow);
+        .stButton > button:focus-visible,
+        .stDownloadButton > button:focus-visible,
+        [data-testid="stLinkButton"] > a:focus-visible,
+        input:focus-visible,
+        textarea:focus-visible,
+        [role="tab"]:focus-visible {
+          outline: 4px solid var(--gr-red) !important;
+          outline-offset: 3px !important;
         }
 
         @keyframes gr-rise {
-          from { opacity: 0; transform: translateY(10px); }
+          from { opacity: 0; transform: translateY(12px); }
           to { opacity: 1; transform: translateY(0); }
         }
 
-        @keyframes gr-rail {
-          from { background-position: 0% 50%; }
-          to { background-position: 220% 50%; }
+        @media (max-width: 860px) {
+          .block-container { padding: 1rem .8rem 3rem; }
+          .gr-hero { grid-template-columns: 1fr; border-radius: 20px; }
+          .gr-hero-title { padding: 1.45rem 1.15rem 1.1rem; }
+          .gr-status-board { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+          .gr-card { min-height: 6.2rem; padding: .8rem; }
+          .gr-flow { grid-template-columns: 1fr; }
+          div[data-testid="stTabs"] [role="tablist"] { border-radius: 18px; }
+          div[data-testid="stTabs"] button[role="tab"] { padding-right: .75rem; padding-left: .75rem; }
         }
 
-        @media (max-width: 760px) {
-          .block-container {
-            padding: 1.35rem .85rem 2.6rem;
-          }
-
-          h1 {
-            font-size: 2.35rem !important;
-          }
-
-          h1::after {
-            width: 82vw;
-          }
-
-          div[data-testid="stTabs"] [role="tablist"] {
-            width: 100%;
-          }
+        @media (max-width: 520px) {
+          .gr-status-board { grid-template-columns: 1fr; }
         }
 
         @media (prefers-reduced-motion: reduce) {
-          *,
-          *::before,
-          *::after {
+          *, *::before, *::after {
             animation-duration: .001ms !important;
             animation-iteration-count: 1 !important;
             scroll-behavior: auto !important;
@@ -340,379 +518,6 @@ def inject_design() -> None:
           }
         }
         </style>
-        <style>
-        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=Zen+Kaku+Gothic+New:wght@400;500;700;900&display=swap');
-
-        :root {
-          --gr-bg: #f3f5f2;
-          --gr-surface: #ffffff;
-          --gr-surface-muted: #e8eeea;
-          --gr-ink: #1f2923;
-          --gr-muted: #63706a;
-          --gr-line: #d2dbd4;
-          --gr-blue: #3159c6;
-          --gr-coral: #df5a42;
-          --gr-green: #177b66;
-          --gr-radius: 6px;
-          --gr-ease: cubic-bezier(.2, .7, .2, 1);
-        }
-
-        body,
-        .stApp {
-          font-family: "IBM Plex Sans", "Zen Kaku Gothic New", system-ui, sans-serif;
-          color: var(--gr-ink);
-          background: var(--gr-bg);
-        }
-
-        [data-testid="stHeader"] {
-          background: rgba(243, 245, 242, .88);
-          backdrop-filter: blur(14px);
-          border-bottom: 1px solid var(--gr-line);
-        }
-
-        .block-container {
-          max-width: 1240px;
-          padding: 2rem 1.5rem 4.5rem;
-        }
-
-        .gr-masthead {
-          display: grid;
-          grid-template-columns: minmax(0, 1fr) auto;
-          align-items: end;
-          gap: 1.5rem;
-          padding: 1.1rem 0 1.35rem;
-          border-top: 6px solid var(--gr-ink);
-          animation: gr-enter .48s var(--gr-ease) both;
-        }
-
-        .gr-eyebrow,
-        .gr-section-eyebrow,
-        .gr-header-status,
-        .gr-month-strip span {
-          margin: 0;
-          color: var(--gr-muted);
-          font-family: "IBM Plex Mono", "Zen Kaku Gothic New", monospace;
-          font-size: .69rem;
-          font-weight: 600;
-          letter-spacing: .11em;
-          line-height: 1.2;
-        }
-
-        .gr-masthead h1 {
-          margin: .3rem 0 0 !important;
-          color: var(--gr-ink);
-          font-family: "Zen Kaku Gothic New", "IBM Plex Sans", sans-serif;
-          font-size: 2.65rem !important;
-          font-weight: 900 !important;
-          letter-spacing: -.025em;
-          line-height: 1.04 !important;
-        }
-
-        .gr-masthead h1::after {
-          display: none !important;
-        }
-
-        .gr-brand-note {
-          margin: .55rem 0 0;
-          color: var(--gr-muted);
-          font-size: .92rem;
-          line-height: 1.6;
-        }
-
-        .gr-header-status {
-          display: grid;
-          gap: .35rem;
-          min-width: 13.5rem;
-          padding: .9rem 1rem;
-          border: 1px solid var(--gr-line);
-          border-left: 4px solid var(--gr-coral);
-          background: var(--gr-surface);
-          color: var(--gr-ink);
-        }
-
-        .gr-header-status strong {
-          font-family: "IBM Plex Sans", "Zen Kaku Gothic New", sans-serif;
-          font-size: .86rem;
-          letter-spacing: 0;
-        }
-
-        .gr-month-strip {
-          display: grid;
-          grid-template-columns: repeat(12, minmax(0, 1fr));
-          gap: 3px;
-          margin: 0 0 1.8rem;
-          animation: gr-enter .48s .08s var(--gr-ease) both;
-        }
-
-        .gr-month-strip span {
-          display: grid;
-          place-items: center;
-          min-height: 2.15rem;
-          background: var(--gr-surface-muted);
-          color: var(--gr-ink);
-        }
-
-        .gr-month-strip span:nth-child(3n + 1) {
-          border-top: 3px solid var(--gr-blue);
-        }
-
-        .gr-month-strip span:nth-child(3n + 2) {
-          border-top: 3px solid var(--gr-green);
-        }
-
-        .gr-month-strip span:nth-child(3n) {
-          border-top: 3px solid var(--gr-coral);
-        }
-
-        .gr-section-heading {
-          display: grid;
-          gap: .28rem;
-          margin: 2rem 0 1.15rem;
-          animation: gr-enter .42s .12s var(--gr-ease) both;
-        }
-
-        .gr-section-heading h2 {
-          margin: 0;
-          color: var(--gr-ink);
-          font-family: "Zen Kaku Gothic New", "IBM Plex Sans", sans-serif;
-          font-size: 1.45rem;
-          font-weight: 900;
-          letter-spacing: -.015em;
-        }
-
-        .gr-section-heading p:last-child {
-          margin: 0;
-          color: var(--gr-muted);
-          font-size: .9rem;
-          line-height: 1.6;
-        }
-
-        div[data-testid="stTabs"] {
-          margin: 0 0 .45rem;
-          animation: gr-enter .45s .16s var(--gr-ease) both;
-        }
-
-        div[data-testid="stTabs"] [role="tablist"] {
-          gap: 1.4rem;
-          width: 100%;
-          overflow-x: auto;
-          border-bottom: 1px solid var(--gr-line);
-        }
-
-        div[data-testid="stTabs"] button[role="tab"] {
-          min-height: 3rem;
-          padding: .6rem 0 .7rem;
-          border: 0;
-          border-bottom: 3px solid transparent;
-          border-radius: 0;
-          color: var(--gr-muted);
-          font-family: "Zen Kaku Gothic New", "IBM Plex Sans", sans-serif;
-          font-weight: 700;
-          transition: color .2s ease, border-color .2s ease;
-        }
-
-        div[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
-          border-bottom-color: var(--gr-coral);
-          color: var(--gr-ink);
-          background: transparent;
-          box-shadow: none;
-        }
-
-        h3 {
-          margin: 1.35rem 0 .75rem !important;
-          color: var(--gr-ink);
-          font-family: "Zen Kaku Gothic New", "IBM Plex Sans", sans-serif;
-          font-size: 1rem !important;
-          font-weight: 900 !important;
-          letter-spacing: 0 !important;
-        }
-
-        [data-testid="stHorizontalBlock"] {
-          gap: .8rem;
-        }
-
-        .stButton > button,
-        .stDownloadButton > button,
-        [data-testid="stLinkButton"] > a {
-          min-height: 2.7rem;
-          border: 1px solid var(--gr-line) !important;
-          border-radius: var(--gr-radius) !important;
-          background: var(--gr-surface) !important;
-          color: var(--gr-ink) !important;
-          font-family: "Zen Kaku Gothic New", "IBM Plex Sans", sans-serif !important;
-          font-size: .9rem !important;
-          font-weight: 700 !important;
-          letter-spacing: 0 !important;
-          box-shadow: none !important;
-          transition: background .2s ease, border-color .2s ease, color .2s ease, transform .2s ease;
-        }
-
-        .stButton > button:hover,
-        .stDownloadButton > button:hover,
-        [data-testid="stLinkButton"] > a:hover {
-          border-color: var(--gr-blue) !important;
-          background: #eef2ff !important;
-          color: var(--gr-blue) !important;
-          transform: translateY(-1px);
-        }
-
-        .stButton > button:active,
-        .stDownloadButton > button:active,
-        [data-testid="stLinkButton"] > a:active {
-          transform: translateY(0) scale(.99);
-        }
-
-        .stButton > button[kind="primary"],
-        .stButton > button[data-testid="baseButton-primary"],
-        [data-testid="stLinkButton"] > a[kind="primary"] {
-          border-color: var(--gr-coral) !important;
-          background: var(--gr-coral) !important;
-          color: #ffffff !important;
-        }
-
-        .stButton > button[kind="primary"]:hover,
-        .stButton > button[data-testid="baseButton-primary"]:hover,
-        [data-testid="stLinkButton"] > a[kind="primary"]:hover {
-          border-color: #bc3f2d !important;
-          background: #bc3f2d !important;
-          color: #ffffff !important;
-        }
-
-        [data-testid="stTextInput"] input,
-        [data-testid="stNumberInput"] input,
-        [data-testid="stDateInput"] input,
-        [data-baseweb="select"] > div,
-        [data-testid="stFileUploader"] section {
-          border-radius: var(--gr-radius) !important;
-          border-color: var(--gr-line) !important;
-          background: var(--gr-surface) !important;
-          box-shadow: none !important;
-        }
-
-        [data-testid="stTextInput"] label,
-        [data-testid="stNumberInput"] label,
-        [data-testid="stDateInput"] label,
-        [data-testid="stSelectbox"] label,
-        [data-testid="stFileUploader"] label {
-          color: var(--gr-muted) !important;
-          font-family: "IBM Plex Mono", "Zen Kaku Gothic New", monospace;
-          font-size: .7rem !important;
-          font-weight: 600 !important;
-          text-transform: uppercase !important;
-          letter-spacing: .08em;
-        }
-
-        code,
-        pre,
-        [data-testid="stCodeBlock"] {
-          font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Consolas, monospace !important;
-          border-radius: var(--gr-radius) !important;
-        }
-
-        [data-testid="stCodeBlock"] {
-          border: 1px solid var(--gr-line);
-          background: var(--gr-surface-muted) !important;
-        }
-
-        [data-testid="stFileUploader"] section {
-          border-style: dashed !important;
-          padding: .75rem !important;
-        }
-
-        div[data-testid="stAlert"] {
-          border: 1px solid var(--gr-line);
-          border-left: 4px solid var(--gr-blue);
-          border-radius: 0 var(--gr-radius) var(--gr-radius) 0 !important;
-          box-shadow: none;
-        }
-
-        div[data-testid="stDataFrame"] {
-          overflow: hidden;
-          border: 1px solid var(--gr-line);
-          border-radius: var(--gr-radius);
-          box-shadow: none;
-        }
-
-        [data-testid="stDataFrame"] [role="columnheader"] {
-          background: var(--gr-surface-muted);
-        }
-
-        [data-testid="stCaptionContainer"] {
-          color: var(--gr-muted);
-          font-size: .87rem;
-          line-height: 1.65;
-        }
-
-        @keyframes gr-enter {
-          from { opacity: 0; transform: translateY(8px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-
-        @media (max-width: 760px) {
-          .block-container {
-            padding: 1.35rem .9rem 3rem;
-          }
-
-          .gr-masthead {
-            grid-template-columns: 1fr;
-            gap: 1rem;
-            padding-top: .9rem;
-          }
-
-          .gr-masthead h1 {
-            font-size: 2.2rem !important;
-          }
-
-          .gr-header-status {
-            min-width: 0;
-          }
-
-          .gr-month-strip {
-            grid-template-columns: repeat(6, minmax(0, 1fr));
-          }
-
-          div[data-testid="stTabs"] [role="tablist"] {
-            gap: 1rem;
-          }
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def render_workspace_header() -> None:
-    st.markdown(
-        """
-        <header class="gr-masthead">
-          <div>
-            <p class="gr-eyebrow">PERSONAL RECEIPT ARCHIVE</p>
-            <h1>GetReceipt</h1>
-            <p class="gr-brand-note">\u9818\u53ce\u66f8\u4fdd\u7ba1\u53f0\u5e33</p>
-          </div>
-          <div class="gr-header-status">
-            <span>STORAGE</span>
-            <strong>Google Drive</strong>
-          </div>
-        </header>
-        <div class="gr-month-strip" aria-label="month index">
-          <span>01</span><span>02</span><span>03</span><span>04</span>
-          <span>05</span><span>06</span><span>07</span><span>08</span>
-          <span>09</span><span>10</span><span>11</span><span>12</span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def render_section_heading(eyebrow: str, title: str, detail: str) -> None:
-    st.markdown(
-        f"""
-        <div class="gr-section-heading">
-          <p class="gr-section-eyebrow">{eyebrow}</p>
-          <h2>{title}</h2>
-          <p>{detail}</p>
-        </div>
         """,
         unsafe_allow_html=True,
     )
@@ -748,11 +553,75 @@ def status_text(record: dict[str, str] | None) -> str:
     return TEXT["unfetched"]
 
 
+def render_workspace_header() -> None:
+    records = ledger().read()
+    latest = latest_status_by_month(records)
+    months = selectable_months()
+    slots = [(target_month, service.id) for target_month in months for service in SERVICES]
+    slot_records = [latest.get(slot) for slot in slots]
+    saved_count = sum(record.get("status") == "uploaded" for record in records)
+    done_slots = sum(record is not None and record.get("status") == "uploaded" for record in slot_records)
+    not_issued_slots = sum(record is not None and record.get("status") == "not_issued" for record in slot_records)
+    open_slots = max(len(slots) - done_slots - not_issued_slots, 0)
+    current_month = month_label(months[-1]) if months else "-"
+
+    st.markdown(
+        f"""
+        <header class="gr-hero">
+          <div class="gr-hero-title">
+            <p class="gr-eyebrow">Receipt command / Google Drive</p>
+            <h1>Get<br>Receipt</h1>
+            <p class="gr-hero-note">
+              iPhoneで受け取った領収書と明細を、対象月・取引先・金額までそろえてGoogle Driveへ保管する個人用オペレーション画面。
+            </p>
+          </div>
+          <div class="gr-status-board" aria-label="保存状況の概要">
+            <div class="gr-card is-blue"><span>保存済ファイル</span><strong>{saved_count:02d}</strong><small>Drive archive</small></div>
+            <div class="gr-card is-red"><span>未取得枠</span><strong>{open_slots:02d}</strong><small>Action queue</small></div>
+            <div class="gr-card is-green"><span>保管完了枠</span><strong>{done_slots:02d}</strong><small>Monthly slots</small></div>
+            <div class="gr-card is-amber"><span>現在の対象</span><strong>{current_month}</strong><small>Latest month</small></div>
+          </div>
+        </header>
+        <ol class="gr-flow" aria-label="領収書保管の流れ">
+          <li><b>01</b><span>対象月を確認</span></li>
+          <li><b>02</b><span>公式サイトを開く</span></li>
+          <li><b>03</b><span>ファイル名を確認</span></li>
+          <li><b>04</b><span>Driveへ保存</span></li>
+        </ol>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_section_heading(eyebrow: str, title: str, detail: str) -> None:
+    st.markdown(
+        f"""
+        <div class="gr-section-heading">
+          <p class="gr-section-eyebrow">{eyebrow}</p>
+          <h2>{title}</h2>
+          <p>{detail}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_dashboard() -> None:
-    render_section_heading("ARCHIVE INDEX", TEXT["dashboard"], "\u5bfe\u8c61\u306e\u6708\u3068\u30b5\u30fc\u30d3\u30b9\u3092\u9078\u629e")
+    render_section_heading("Archive index", TEXT["dashboard"], "対象の月とサービスを選択")
     records = ledger().read()
     latest = latest_status_by_month(records)
     months = list(reversed(selectable_months()))
+
+    st.markdown(
+        """
+        <div class="gr-status-key" aria-label="保管状態の凡例">
+          <span class="is-open"><i></i>未取得 — クリックして取得へ</span>
+          <span class="is-done"><i></i>取得済 — 保管済み</span>
+          <span class="is-none"><i></i>未発行 — 記録済み</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     header_cols = st.columns([1.35, 1, 1, 1, 1])
     header_cols[0].markdown(f"**{TEXT['target_month']}**")
@@ -761,20 +630,25 @@ def render_dashboard() -> None:
 
     for target_month in months:
         row = st.columns([1.35, 1, 1, 1, 1])
-        row[0].write(month_label(target_month))
+        row[0].markdown(f'<div class="gr-month-cell">{month_label(target_month)}</div>', unsafe_allow_html=True)
         for index, service in enumerate(SERVICES, start=1):
             record = latest.get((target_month, service.id))
             label = status_text(record)
-            if row[index].button(label, key=f"run:{target_month}:{service.id}", use_container_width=True):
+            button_type = "primary" if label == TEXT["unfetched"] else "secondary"
+            if row[index].button(
+                label,
+                key=f"run:{target_month}:{service.id}",
+                type=button_type,
+                use_container_width=True,
+            ):
                 select_for_acquisition(service.id, target_month)
                 st.success(
-                    f"{service.label} / {month_label(target_month)}\u3092\u9078\u629e\u3057\u307e\u3057\u305f\u3002"
-                    "\u300c\u53d6\u5f97\u958b\u59cb\u300d\u3067\u516c\u5f0f\u30b5\u30a4\u30c8\u3092\u958b\u3044\u3066\u304f\u3060\u3055\u3044\u3002"
+                    f"{service.label} / {month_label(target_month)}を選択しました。"
+                    "「取得開始」で公式サイトを開いてください。"
                 )
 
 
 def select_for_acquisition(service_id: str, target_month: str) -> None:
-    """Keep the chosen receipt context while the user moves between tabs."""
     st.session_state["acq_service"] = service_id
     st.session_state["acq_month"] = target_month
     st.session_state["manual_service"] = service_id
@@ -782,7 +656,7 @@ def select_for_acquisition(service_id: str, target_month: str) -> None:
 
 
 def render_acquisition_form() -> None:
-    render_section_heading("SOURCE", "\u516c\u5f0f\u30b5\u30a4\u30c8\u304b\u3089\u53d6\u5f97", "\u30b5\u30fc\u30d3\u30b9\u3068\u5bfe\u8c61\u6708\u3092\u9078\u629e")
+    render_section_heading("Source", "公式サイトから取得", "サービスと対象月を選択")
     months = selectable_months()
     service_ids = [service.id for service in SERVICES]
     selected_service = st.selectbox(
@@ -799,15 +673,15 @@ def render_acquisition_form() -> None:
         key="acq_month",
     )
     service = service_by_id(selected_service)
-    st.link_button(f"{service.label}\u306e\u516c\u5f0f\u30b5\u30a4\u30c8\u3092\u958b\u304f", service.portal_url, type="primary", use_container_width=True)
+    st.link_button(f"{service.label}の公式サイトを開く", service.portal_url, type="primary", use_container_width=True)
     st.info(
-        f"{month_label(selected_month)}\u306e\u9818\u53ce\u66f8\u30fb\u660e\u7d30\u3092\u30c0\u30a6\u30f3\u30ed\u30fc\u30c9\u5f8c\u3001"
-        "\u300c\u624b\u52d5\u767b\u9332\u300d\u3067Google Drive\u3078\u4fdd\u5b58\u3057\u307e\u3059\u3002"
+        f"{month_label(selected_month)}の領収書・明細をダウンロード後、"
+        "「手動登録」でGoogle Driveへ保存します。"
     )
 
 
 def render_manual_upload() -> None:
-    render_section_heading("INTAKE", "\u30d5\u30a1\u30a4\u30eb\u3092\u4fdd\u7ba1", "iPhone\u306e\u30d5\u30a1\u30a4\u30eb\u3092Google Drive\u3078\u4fdd\u5b58")
+    render_section_heading("Intake", "ファイルを保管", "iPhoneのファイルをGoogle Driveへ保存")
 
     months = selectable_months()
     service_ids = [service.id for service in SERVICES]
@@ -826,14 +700,14 @@ def render_manual_upload() -> None:
             format_func=month_label,
             key="manual_month",
         )
-        transaction_date = st.date_input("\u53d6\u5f15\u65e5 / \u767a\u884c\u65e5", value=date.today())
+        transaction_date = st.date_input("取引日 / 発行日", value=date.today())
     with right:
         service = service_by_id(service_id)
-        partner_name = st.text_input("\u53d6\u5f15\u5148", value=service.default_partner)
-        amount_yen = st.number_input("\u91d1\u984d\uff08\u5186\uff09", min_value=0, step=1, value=0)
-        source_url = st.text_input("\u53d6\u5f97\u5143URL", value="")
+        partner_name = st.text_input("取引先", value=service.default_partner)
+        amount_yen = st.number_input("金額（円）", min_value=0, step=1, value=0)
+        source_url = st.text_input("取得元URL", value="")
 
-    uploaded_file = st.file_uploader("\u4fdd\u5b58\u3059\u308bPDF/CSV/\u753b\u50cf", type=["pdf", "csv", "png", "jpg", "jpeg"])
+    uploaded_file = st.file_uploader("保存するPDF/CSV/画像", type=["pdf", "csv", "png", "jpg", "jpeg"])
     preview_extension = normalize_extension(uploaded_file.name if uploaded_file else None)
     metadata = ReceiptMetadata(
         service_id=service_id,
@@ -851,10 +725,10 @@ def render_manual_upload() -> None:
     cols = st.columns([1, 1, 2])
     if cols[0].button(TEXT["save_drive"], type="primary", use_container_width=True):
         if uploaded_file is None:
-            st.error("\u4fdd\u5b58\u3059\u308b\u30d5\u30a1\u30a4\u30eb\u3092\u9078\u629e\u3057\u3066\u304f\u3060\u3055\u3044\u3002")
+            st.error("保存するファイルを選択してください。")
             return
         if amount_yen <= 0:
-            st.error("\u91d1\u984d\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044\u3002")
+            st.error("金額を入力してください。")
             return
         try:
             content = uploaded_file.getvalue()
@@ -877,11 +751,11 @@ def render_manual_upload() -> None:
                 mime_type="text/csv",
             )
         except Exception as error:
-            st.error(f"Google Drive\u3078\u306e\u4fdd\u5b58\u306b\u5931\u6557\u3057\u307e\u3057\u305f: {error}")
+            st.error(f"Google Driveへの保存に失敗しました: {error}")
             return
-        st.success("Google Drive\u3078\u4fdd\u5b58\u3057\u307e\u3057\u305f\u3002")
+        st.success("Google Driveへ保存しました。")
         if saved.get("drive_web_view_link"):
-            st.link_button("Drive\u3067\u958b\u304f", saved["drive_web_view_link"])
+            st.link_button("Driveで開く", saved["drive_web_view_link"])
 
     if cols[1].button(TEXT["mark_not_issued"], use_container_width=True):
         try:
@@ -893,20 +767,20 @@ def render_manual_upload() -> None:
                 ledger=ledger(),
             )
         except Exception as error:
-            st.error(f"\u8a18\u9332\u306b\u5931\u6557\u3057\u307e\u3057\u305f: {error}")
+            st.error(f"記録に失敗しました: {error}")
             return
-        st.success("\u672a\u767a\u884c\u3068\u3057\u3066\u8a18\u9332\u3057\u307e\u3057\u305f\u3002")
+        st.success("未発行として記録しました。")
 
 
 def render_history() -> None:
-    render_section_heading("LEDGER", TEXT["ledger"], "\u4fdd\u5b58\u6e08\u307f\u306e\u9818\u53ce\u66f8\u30fb\u660e\u7d30")
+    render_section_heading("Ledger", TEXT["ledger"], "保存済みの領収書・明細")
     records = ledger().read()
     if not records:
-        st.info("\u307e\u3060\u4fdd\u5b58\u5c65\u6b74\u306f\u3042\u308a\u307e\u305b\u3093\u3002")
+        st.info("まだ保存履歴はありません。")
         return
     st.dataframe(records, use_container_width=True, hide_index=True)
     st.download_button(
-        "\u53f0\u5e33CSV\u3092\u30c0\u30a6\u30f3\u30ed\u30fc\u30c9",
+        "台帳CSVをダウンロード",
         data=ledger().to_csv_bytes(),
         file_name="receipt_index.csv",
         mime="text/csv",
@@ -914,16 +788,16 @@ def render_history() -> None:
 
 
 def render_settings() -> None:
-    render_section_heading("CONNECTION", TEXT["settings"], "Google Drive\u3068\u306e\u9023\u643a\u72b6\u614b")
-    st.write("Google Drive\u4fdd\u5b58\u5148")
+    render_section_heading("Connection", TEXT["settings"], "Google Driveとの連携状態")
+    st.write("Google Drive保存先")
     st.code(RECEIPT_DRIVE_FOLDER_ID, language="text")
-    st.link_button("\u9818\u53ce\u66f8\u30d5\u30a9\u30eb\u30c0\u3092\u958b\u304f", RECEIPT_DRIVE_FOLDER_URL)
+    st.link_button("領収書フォルダを開く", RECEIPT_DRIVE_FOLDER_URL)
 
     if secrets_configured():
-        st.success("Google Drive\u7528\u306eStreamlit Secrets\u304c\u8a2d\u5b9a\u3055\u308c\u3066\u3044\u307e\u3059\u3002")
+        st.success("Google Drive用のStreamlit Secretsが設定されています。")
     else:
-        st.warning("Google Drive\u7528\u306eStreamlit Secrets\u304c\u672a\u8a2d\u5b9a\u3067\u3059\u3002")
-    st.caption("\u4fdd\u5b58\u53f0\u5e33\u306fGoogle Drive\u306e `_receipt_index.csv` \u306b\u3082\u540c\u671f\u3055\u308c\u307e\u3059\u3002")
+        st.warning("Google Drive用のStreamlit Secretsが未設定です。")
+    st.caption("保存台帳はGoogle Driveの `_receipt_index.csv` にも同期されます。")
 
 
 def _mime_type(extension: str) -> str:
