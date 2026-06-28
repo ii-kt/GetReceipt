@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from datetime import date
+from io import BytesIO
 
 import streamlit as st
 
+from src.acquisition import acquisition_guidance, default_transaction_date
+from src.browser_session import BrowserAutomationError, ManagedBrowser
 from src.config import (
+    DATA_DIR,
     LEDGER_PATH,
     RECEIPT_DRIVE_FOLDER_ID,
     RECEIPT_DRIVE_FOLDER_URL,
@@ -24,8 +27,17 @@ from src.naming import (
 from src.receipt_pipeline import (
     drive_storage_from_secrets,
     record_not_issued_to_drive,
+    upload_auto_receipt_to_drive,
 )
+from src.epos_automation import AcquisitionError, EposAutoFetcher
+from src.official_site_automation import CommufaAutoFetcher, TokutenAutoFetcher, WebBillingAutoFetcher
 
+try:
+    from PIL import Image
+    from streamlit_image_coordinates import streamlit_image_coordinates
+except Exception:
+    Image = None
+    streamlit_image_coordinates = None
 
 st.set_page_config(
     page_title="GetReceipt",
@@ -44,7 +56,7 @@ TEXT = {
     "unfetched": "未取得",
     "uploaded": "取得済",
     "not_issued": "未発行",
-    "start": "取得開始",
+    "start": "自動取得",
     "save_drive": "Driveへ保存",
     "mark_not_issued": "未発行として記録",
 }
@@ -534,6 +546,52 @@ def secrets_configured() -> bool:
         return False
 
 
+def automation_browser(service_id: str) -> ManagedBrowser:
+    browser_key = f"_automation_browser_{service_id}"
+    browser = st.session_state.get(browser_key)
+    if browser is None:
+        browser = ManagedBrowser(
+            profile_dir=DATA_DIR / f"browser-profile-{service_id}",
+            download_dir=DATA_DIR / f"browser-downloads-{service_id}",
+        )
+        st.session_state[browser_key] = browser
+    return browser
+
+
+def browser_image_key(service_id: str) -> str:
+    return f"browser_image_{service_id}"
+
+
+def update_browser_image(service_id: str, browser: ManagedBrowser) -> None:
+    st.session_state[browser_image_key(service_id)] = browser.screenshot()
+
+
+def service_fetcher(service_id: str, browser: ManagedBrowser):
+    if service_id == "epos":
+        return EposAutoFetcher(browser)
+    if service_id == "commufa":
+        return CommufaAutoFetcher(browser)
+    if service_id == "tokuten":
+        return TokutenAutoFetcher(browser)
+    if service_id == "mobile":
+        return WebBillingAutoFetcher(browser, credentials=webbilling_credentials())
+    raise KeyError(service_id)
+
+
+def webbilling_credentials() -> dict[str, str]:
+    try:
+        for section_name in ("webbilling", "mobile", "d_account"):
+            if section_name in st.secrets:
+                section = st.secrets[section_name]
+                return {
+                    "dAccountId": section.get("dAccountId") or section.get("id") or "",
+                    "password": section.get("password") or "",
+                }
+    except Exception:
+        pass
+    return {}
+
+
 def latest_status_by_month(records: list[dict[str, str]]) -> dict[tuple[str, str], dict[str, str]]:
     latest: dict[tuple[str, str], dict[str, str]] = {}
     for record in records:
@@ -615,7 +673,7 @@ def render_dashboard() -> None:
     st.markdown(
         """
         <div class="gr-status-key" aria-label="保管状態の凡例">
-          <span class="is-open"><i></i>未取得 — クリックして取得へ</span>
+          <span class="is-open"><i></i>未取得 — クリックして自動取得へ</span>
           <span class="is-done"><i></i>取得済 — 保管済み</span>
           <span class="is-none"><i></i>未発行 — 記録済み</span>
         </div>
@@ -644,19 +702,31 @@ def render_dashboard() -> None:
                 select_for_acquisition(service.id, target_month)
                 st.success(
                     f"{service.label} / {month_label(target_month)}を選択しました。"
-                    "「取得開始」で公式サイトを開いてください。"
+                    "「自動取得」でPDF取得を進めてください。"
                 )
 
 
 def select_for_acquisition(service_id: str, target_month: str) -> None:
     st.session_state["acq_service"] = service_id
     st.session_state["acq_month"] = target_month
+    prime_manual_defaults(service_id, target_month, force=True)
+
+
+def prime_manual_defaults(service_id: str, target_month: str, *, force: bool = False) -> None:
+    defaults_key = f"{service_id}:{target_month}"
+    if not force and st.session_state.get("_manual_defaults_key") == defaults_key:
+        return
+
+    service = service_by_id(service_id)
     st.session_state["manual_service"] = service_id
     st.session_state["manual_month"] = target_month
+    st.session_state["manual_transaction_date"] = default_transaction_date(service_id, target_month)
+    st.session_state["manual_source_url"] = service.portal_url
+    st.session_state["_manual_defaults_key"] = defaults_key
 
 
 def render_acquisition_form() -> None:
-    render_section_heading("Source", "公式サイトから取得", "サービスと対象月を選択")
+    render_section_heading("Source", "公式サイトから自動取得", "サービスと対象月を選択")
     months = selectable_months()
     service_ids = [service.id for service in SERVICES]
     selected_service = st.selectbox(
@@ -673,11 +743,129 @@ def render_acquisition_form() -> None:
         key="acq_month",
     )
     service = service_by_id(selected_service)
-    st.link_button(f"{service.label}の公式サイトを開く", service.portal_url, type="primary", use_container_width=True)
-    st.info(
-        f"{month_label(selected_month)}の領収書・明細をダウンロード後、"
-        "「手動登録」でGoogle Driveへ保存します。"
-    )
+    prime_manual_defaults(selected_service, selected_month)
+    guidance = acquisition_guidance(selected_service, selected_month)
+
+    st.markdown(f"**{guidance.heading}**")
+    st.code(guidance.target_hint, language="text")
+    for step in guidance.steps:
+        st.write(f"- {step}")
+    st.info(guidance.note)
+
+    render_official_auto_acquisition(selected_service, selected_month)
+
+
+def render_official_auto_acquisition(service_id: str, selected_month: str) -> None:
+    st.markdown("**取得用ブラウザ**")
+    browser = automation_browser(service_id)
+    fetcher = service_fetcher(service_id, browser)
+    service = service_by_id(service_id)
+    image_key = browser_image_key(service_id)
+
+    controls = st.columns([1, 1, 1, 1])
+    if controls[0].button("ブラウザを開く", key=f"open_browser:{service_id}", type="primary", use_container_width=True):
+        try:
+            fetcher.open_portal()
+            update_browser_image(service_id, browser)
+            st.success(f"{service.label}の取得画面を開きました。ログインが必要な場合は下の画面で操作してください。")
+        except Exception as error:
+            st.error(f"取得用ブラウザを開けませんでした: {error}")
+
+    if controls[1].button("画面更新", key=f"refresh_browser:{service_id}", use_container_width=True):
+        try:
+            update_browser_image(service_id, browser)
+        except Exception as error:
+            st.error(f"画面更新に失敗しました: {error}")
+
+    if controls[2].button("Enter", key=f"enter_browser:{service_id}", use_container_width=True):
+        try:
+            browser.press_key("Enter")
+            update_browser_image(service_id, browser)
+        except Exception as error:
+            st.error(f"キー入力に失敗しました: {error}")
+
+    if controls[3].button("セッション終了", key=f"close_browser:{service_id}", use_container_width=True):
+        try:
+            browser.close(clear_profile=True)
+            st.session_state.pop(f"_automation_browser_{service_id}", None)
+            st.session_state.pop(image_key, None)
+            st.success("取得用ブラウザのセッションを終了しました。")
+        except Exception as error:
+            st.error(f"セッション終了に失敗しました: {error}")
+
+    image_bytes = st.session_state.get(image_key)
+    if image_bytes:
+        if Image is not None and streamlit_image_coordinates is not None:
+            image = Image.open(BytesIO(image_bytes))
+            coordinates = streamlit_image_coordinates(image, key=f"{service_id}-browser-image")
+            if coordinates:
+                point = (int(coordinates["x"]), int(coordinates["y"]))
+                click_key = f"_last_browser_click_{service_id}"
+                if st.session_state.get(click_key) != point:
+                    try:
+                        browser.click_at(point[0], point[1])
+                        st.session_state[click_key] = point
+                        update_browser_image(service_id, browser)
+                    except Exception as error:
+                        st.error(f"クリック操作に失敗しました: {error}")
+        else:
+            st.image(image_bytes)
+            st.caption("画像クリック用ライブラリがないため、下の座標入力で操作してください。")
+
+    click_cols = st.columns([1, 1, 1])
+    x = click_cols[0].number_input("X", min_value=0, value=0, step=1, key=f"x:{service_id}")
+    y = click_cols[1].number_input("Y", min_value=0, value=0, step=1, key=f"y:{service_id}")
+    if click_cols[2].button("座標クリック", key=f"click_browser:{service_id}", use_container_width=True):
+        try:
+            browser.click_at(int(x), int(y))
+            update_browser_image(service_id, browser)
+        except Exception as error:
+            st.error(f"クリック操作に失敗しました: {error}")
+
+    input_cols = st.columns([2, 1])
+    text = input_cols[0].text_input("取得用ブラウザへ入力", type="password", key=f"text_input:{service_id}")
+    if input_cols[1].button("入力", key=f"insert_browser:{service_id}", use_container_width=True):
+        try:
+            browser.insert_text(text)
+            update_browser_image(service_id, browser)
+        except Exception as error:
+            st.error(f"テキスト入力に失敗しました: {error}")
+
+    if st.button("PDFを自動取得してDriveへ保存", key=f"fetch_pdf:{service_id}", type="primary", use_container_width=True):
+        if not secrets_configured():
+            st.error("Google Drive用のSecretsが未設定です。先に設定してください。")
+            return
+        try:
+            statement = fetcher.fetch_pdf(selected_month)
+            storage = drive_storage_from_secrets(st.secrets)
+            saved = upload_auto_receipt_to_drive(
+                service_id=service_id,
+                target_month=selected_month,
+                content=statement.content,
+                original_file_name=statement.original_file_name,
+                source_url=statement.source_url,
+                metadata_text=statement.metadata_text,
+                storage=storage,
+                ledger=ledger(),
+            )
+        except AcquisitionError as error:
+            st.warning(str(error))
+            if error.advice:
+                st.info(error.advice)
+            try:
+                update_browser_image(service_id, browser)
+            except Exception:
+                pass
+            return
+        except (BrowserAutomationError, Exception) as error:
+            st.error(f"自動取得に失敗しました: {error}")
+            return
+
+        st.success("PDFを自動取得し、Google Driveへ保存しました。")
+        for line in statement.logs:
+            st.caption(line)
+        if saved.get("drive_web_view_link"):
+            st.link_button("Driveで開く", saved["drive_web_view_link"])
 
 
 def render_manual_upload() -> None:
@@ -700,12 +888,12 @@ def render_manual_upload() -> None:
             format_func=month_label,
             key="manual_month",
         )
-        transaction_date = st.date_input("取引日 / 発行日", value=date.today())
+        transaction_date = st.date_input("取引日 / 発行日", key="manual_transaction_date")
     with right:
         service = service_by_id(service_id)
         partner_name = st.text_input("取引先", value=service.default_partner)
         amount_yen = st.number_input("金額（円）", min_value=0, step=1, value=0)
-        source_url = st.text_input("取得元URL", value="")
+        source_url = st.text_input("取得元URL", key="manual_source_url")
 
     uploaded_file = st.file_uploader("保存するPDF/CSV/画像", type=["pdf", "csv", "png", "jpg", "jpeg"])
     preview_extension = normalize_extension(uploaded_file.name if uploaded_file else None)
