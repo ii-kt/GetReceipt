@@ -603,12 +603,22 @@ class ManagedBrowser:
         return file_path
 
     def close(self, *, clear_profile: bool = False) -> None:
+        process = self.process
         if self.connection:
             try:
                 self.connection.send("Browser.close", timeout=5)
             except Exception:
                 self.connection.close()
         self.connection = None
+        if process and process.poll() is None:
+            try:
+                process.wait(timeout=5)
+            except Exception:
+                try:
+                    process.kill()
+                    process.wait(timeout=3)
+                except Exception:
+                    pass
         self.process = None
         self.target_id = None
         self.session_id = None

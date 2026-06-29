@@ -204,6 +204,13 @@ def update_browser_image(service_id: str, browser: ManagedBrowser) -> None:
     st.session_state[browser_image_key(service_id)] = browser.screenshot()
 
 
+def release_automation_browser(service_id: str, browser: ManagedBrowser, *, clear_profile: bool = True) -> None:
+    try:
+        browser.close(clear_profile=clear_profile)
+    finally:
+        st.session_state.pop(f"_automation_browser_{service_id}", None)
+
+
 def service_fetcher(service_id: str, browser: ManagedBrowser):
     if service_id == "epos":
         return EposAutoFetcher(browser, credentials=service_credentials(service_id))
@@ -459,11 +466,13 @@ def render_official_auto_acquisition(service_id: str, selected_month: str) -> No
                 update_browser_image(service_id, browser)
             except Exception:
                 pass
+            release_automation_browser(service_id, browser)
             return
         except (BrowserAutomationError, Exception) as error:
             if status_box:
                 status_box.update(label=f"{service.label}の取得に失敗しました。", state="error")
             st.error(f"取得に失敗しました: {error}")
+            release_automation_browser(service_id, browser)
             return
 
         st.success("PDFを取得し、Google Driveへ保存しました。")
@@ -471,6 +480,7 @@ def render_official_auto_acquisition(service_id: str, selected_month: str) -> No
             st.caption(line)
         if saved.get("drive_web_view_link"):
             st.link_button("Driveで開く", saved["drive_web_view_link"])
+        release_automation_browser(service_id, browser)
 
 
 def render_acquisition_workspace() -> None:
