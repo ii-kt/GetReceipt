@@ -391,9 +391,12 @@ def render_official_auto_acquisition(service_id: str, selected_month: str) -> No
             st.error(f"{service.label}のログインSecretsが未設定です。設定タブの形式でStreamlit Cloud Secretsへ追加してください。")
             return
         try:
-            fetcher.open_portal()
-            update_browser_image(service_id, browser)
-            st.success(f"{service.label}の自動ログインを開始しました。")
+            with st.status(f"{service.label}の自動ログインを実行しています。", expanded=True) as status:
+                status.write("取得用ブラウザを起動し、ログイン画面へ進みます。")
+                fetcher.open_portal()
+                status.write("ログイン情報の自動入力と送信を実行しました。")
+                update_browser_image(service_id, browser)
+                status.update(label=f"{service.label}の自動ログイン開始処理が完了しました。", state="complete")
         except Exception as error:
             st.error(f"自動ログインに失敗しました: {error}")
 
@@ -424,18 +427,22 @@ def render_official_auto_acquisition(service_id: str, selected_month: str) -> No
             st.error(f"{service.label}のログインSecretsが未設定です。設定タブの形式でStreamlit Cloud Secretsへ追加してください。")
             return
         try:
-            statement = fetcher.fetch_pdf(selected_month)
-            storage = drive_storage_from_secrets(st.secrets)
-            saved = upload_auto_receipt_to_drive(
-                service_id=service_id,
-                target_month=selected_month,
-                content=statement.content,
-                original_file_name=statement.original_file_name,
-                source_url=statement.source_url,
-                metadata_text=statement.metadata_text,
-                storage=storage,
-                ledger=ledger(),
-            )
+            with st.status(f"{service.label}の取得を実行しています。", expanded=True) as status:
+                status.write("ログイン、明細取得、PDF生成を自動で進めます。")
+                statement = fetcher.fetch_pdf(selected_month)
+                status.write("Google Driveへ保存しています。")
+                storage = drive_storage_from_secrets(st.secrets)
+                saved = upload_auto_receipt_to_drive(
+                    service_id=service_id,
+                    target_month=selected_month,
+                    content=statement.content,
+                    original_file_name=statement.original_file_name,
+                    source_url=statement.source_url,
+                    metadata_text=statement.metadata_text,
+                    storage=storage,
+                    ledger=ledger(),
+                )
+                status.update(label=f"{service.label}の取得とDrive保存が完了しました。", state="complete")
         except AcquisitionError as error:
             st.warning(str(error))
             if error.advice:

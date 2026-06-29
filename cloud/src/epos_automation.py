@@ -143,7 +143,7 @@ class EposAutoFetcher:
 
     def open_portal(self) -> dict[str, Any]:
         self.browser.navigate(self.service.portal_url, wait_seconds=1.5)
-        self._wait_for_login(timeout_seconds=45)
+        self._advance_login(max_steps=4)
         return self.browser.page_summary()
 
     def fetch_pdf(self, target_month: str) -> FetchedStatement:
@@ -176,6 +176,40 @@ class EposAutoFetcher:
             logs=tuple(form.get("logs") or ()),
         )
 
+    def _apply_login_result(self, result: dict[str, Any]) -> bool:
+        code = str(result.get("code") or "")
+        if code in {"LOGIN_ID_NOT_CONFIGURED", "PASSWORD_NOT_CONFIGURED"}:
+            raise AcquisitionError(
+                "エポスカードのログインSecretsが未設定です。",
+                code=code,
+                advice="Streamlit CloudのSecretsにエポスNet IDとパスワードを設定してください。",
+            )
+        if code == "SECURITY_CHALLENGE":
+            raise AcquisitionError(
+                "エポスカードで追加認証が表示されました。",
+                code="SECURITY_CHALLENGE",
+                advice="ワンタイムコード、CAPTCHA、本人確認などサイト側の追加認証が出ているため、通常ログインの自動入力では続行できません。",
+            )
+        if result.get("attempted") and result.get("click"):
+            click = result["click"]
+            self.browser.click_at(int(click["x"]), int(click["y"]))
+            time.sleep(1.2)
+            return True
+        if result.get("attempted") and result.get("pressEnter"):
+            self.browser.press_key("Enter")
+            time.sleep(1.2)
+            return True
+        return False
+
+    def _advance_login(self, max_steps: int = 4) -> None:
+        for _ in range(max_steps):
+            summary = self.browser.page_summary()
+            if classify_login_state(summary) == "logged-in":
+                return
+            result = self.browser.evaluate(build_epos_auto_login_expression(self.credentials), timeout=8) or {}
+            if not self._apply_login_result(result):
+                return
+
     def _wait_for_login(self, timeout_seconds: float = 90) -> None:
         deadline = time.time() + timeout_seconds
         last_state = "unknown"
@@ -189,26 +223,7 @@ class EposAutoFetcher:
             result = self.browser.evaluate(build_epos_auto_login_expression(self.credentials), timeout=15) or {}
             code = str(result.get("code") or "")
             last_reason = str(result.get("reason") or code or "")
-            if code in {"LOGIN_ID_NOT_CONFIGURED", "PASSWORD_NOT_CONFIGURED"}:
-                raise AcquisitionError(
-                    "エポスカードのログインSecretsが未設定です。",
-                    code=code,
-                    advice="Streamlit CloudのSecretsにエポスNet IDとパスワードを設定してください。",
-                )
-            if code == "SECURITY_CHALLENGE":
-                raise AcquisitionError(
-                    "エポスカードで追加認証が表示されました。",
-                    code="SECURITY_CHALLENGE",
-                    advice="ワンタイムコード、CAPTCHA、本人確認などサイト側の追加認証が出ているため、通常ログインの自動入力では続行できません。",
-                )
-            if result.get("attempted") and result.get("click"):
-                click = result["click"]
-                self.browser.click_at(int(click["x"]), int(click["y"]))
-                time.sleep(1.2)
-                continue
-            if result.get("attempted") and result.get("pressEnter"):
-                self.browser.press_key("Enter")
-                time.sleep(1.2)
+            if self._apply_login_result(result):
                 continue
             time.sleep(1.0)
         raise AcquisitionError(

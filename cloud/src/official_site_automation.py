@@ -212,7 +212,7 @@ class CommufaAutoFetcher:
 
     def open_portal(self) -> dict[str, Any]:
         self.browser.navigate(self.config.target_url, wait_seconds=1.5)
-        self._wait_for_login(timeout_seconds=45)
+        self._advance_login(max_steps=4)
         return self.browser.page_summary()
 
     def fetch_pdf(self, target_month: str) -> FetchedStatement:
@@ -291,6 +291,15 @@ class CommufaAutoFetcher:
             advice=last_reason or "Streamlit Cloud Secretsのログイン情報とコミュファのログイン画面を確認してください。",
         )
 
+    def _advance_login(self, max_steps: int = 4) -> None:
+        for _ in range(max_steps):
+            summary = self.browser.page_summary()
+            if classify_configured_login_state(summary, self.config) == "logged-in":
+                return
+            result = self.browser.evaluate(build_configured_auto_login_expression(self.credentials), timeout=8) or {}
+            if not _apply_auto_login_result(self.browser, result, self.service.label):
+                return
+
 
 class TokutenAutoFetcher:
     def __init__(self, browser: ManagedBrowser, credentials: dict[str, str] | None = None) -> None:
@@ -301,7 +310,7 @@ class TokutenAutoFetcher:
 
     def open_portal(self) -> dict[str, Any]:
         self.browser.navigate(self.config.target_url, wait_seconds=2.0)
-        self._wait_for_mailbox(timeout_seconds=45)
+        self._advance_mailbox_login(max_steps=4)
         return self.browser.page_summary()
 
     def fetch_pdf(self, target_month: str) -> FetchedStatement:
@@ -372,6 +381,19 @@ class TokutenAutoFetcher:
             advice="Streamlit Cloud SecretsのMicrosoft/Outlookログイン情報とOutlook Webのログイン画面を確認してください。",
         )
 
+    def _advance_mailbox_login(self, max_steps: int = 4) -> None:
+        for _ in range(max_steps):
+            ready = self.browser.evaluate(build_mailbox_ready_expression(), timeout=8)
+            if ready:
+                return
+            summary = self.browser.page_summary()
+            state = classify_tokuten_login_state(summary)
+            if state not in {"login-required", "loading", "unknown"}:
+                return
+            result = self.browser.evaluate(build_microsoft_auto_login_expression(self.credentials), timeout=8) or {}
+            if not _apply_auto_login_result(self.browser, result, self.service.label):
+                return
+
     def _search_mail(self, target_month: str) -> None:
         query = build_tokuten_search_query(target_month, self.config)
         result = self.browser.evaluate(build_outlook_search_expression(query), timeout=20) or {}
@@ -412,7 +434,7 @@ class WebBillingAutoFetcher:
 
     def open_portal(self) -> dict[str, Any]:
         self.browser.navigate(self.config.target_url, wait_seconds=1.5)
-        self._wait_for_login(timeout_seconds=45)
+        self._advance_login(max_steps=4)
         return self.browser.page_summary()
 
     def fetch_pdf(self, target_month: str) -> FetchedStatement:
@@ -493,6 +515,23 @@ class WebBillingAutoFetcher:
             code="LOGIN_REQUIRED" if last_state == "login-required" else "LOGIN_TIMEOUT",
             advice="取得用ブラウザでWebビリングまたはdアカウントの認証を完了してから、もう一度取得してください。",
         )
+
+    def _advance_login(self, max_steps: int = 4) -> None:
+        for _ in range(max_steps):
+            summary = self.browser.page_summary()
+            if classify_configured_login_state(summary, self.config) == "logged-in":
+                return
+            auto_login = self.browser.evaluate(build_webbilling_auto_login_expression(self.credentials), timeout=8) or {}
+            if auto_login.get("code") in {"PASSWORD_NOT_CONFIGURED", "D_ACCOUNT_ID_NOT_CONFIGURED"}:
+                _apply_auto_login_result(self.browser, auto_login, self.service.label)
+            if auto_login.get("waitingForSecurityCode"):
+                _apply_auto_login_result(self.browser, auto_login, self.service.label)
+            if auto_login.get("attempted") and auto_login.get("click"):
+                click = auto_login["click"]
+                self.browser.click_at(int(click["x"]), int(click["y"]))
+                time.sleep(1.2)
+                continue
+            return
 
 
 def _filename_matches_month(file_name: str, year: int, month: int) -> bool:
