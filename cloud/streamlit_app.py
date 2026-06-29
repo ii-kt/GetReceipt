@@ -390,14 +390,18 @@ def render_official_auto_acquisition(service_id: str, selected_month: str) -> No
         if not login_secrets_configured(service_id):
             st.error(f"{service.label}のログインSecretsが未設定です。設定タブの形式でStreamlit Cloud Secretsへ追加してください。")
             return
+        status_box = None
         try:
-            with st.status(f"{service.label}の自動ログインを実行しています。", expanded=True) as status:
+            status_box = st.status(f"{service.label}の自動ログインを実行しています。", expanded=True)
+            with status_box as status:
                 status.write("取得用ブラウザを起動し、ログイン画面へ進みます。")
                 fetcher.open_portal()
-                status.write("ログイン情報の自動入力と送信を実行しました。")
+                status.write("ログイン完了を確認しました。")
                 update_browser_image(service_id, browser)
-                status.update(label=f"{service.label}の自動ログイン開始処理が完了しました。", state="complete")
+                status.update(label=f"{service.label}のログイン完了を確認しました。", state="complete")
         except Exception as error:
+            if status_box:
+                status_box.update(label=f"{service.label}の自動ログインに失敗しました。", state="error")
             st.error(f"自動ログインに失敗しました: {error}")
 
     if controls[1].button("画面更新", key=f"refresh_browser:{service_id}", use_container_width=True):
@@ -426,8 +430,10 @@ def render_official_auto_acquisition(service_id: str, selected_month: str) -> No
         if not login_secrets_configured(service_id):
             st.error(f"{service.label}のログインSecretsが未設定です。設定タブの形式でStreamlit Cloud Secretsへ追加してください。")
             return
+        status_box = None
         try:
-            with st.status(f"{service.label}の取得を実行しています。", expanded=True) as status:
+            status_box = st.status(f"{service.label}の取得を実行しています。", expanded=True)
+            with status_box as status:
                 status.write("ログイン、明細取得、PDF生成を自動で進めます。")
                 statement = fetcher.fetch_pdf(selected_month)
                 status.write("Google Driveへ保存しています。")
@@ -444,6 +450,8 @@ def render_official_auto_acquisition(service_id: str, selected_month: str) -> No
                 )
                 status.update(label=f"{service.label}の取得とDrive保存が完了しました。", state="complete")
         except AcquisitionError as error:
+            if status_box:
+                status_box.update(label=f"{service.label}の取得に失敗しました。", state="error")
             st.warning(str(error))
             if error.advice:
                 st.info(error.advice)
@@ -453,6 +461,8 @@ def render_official_auto_acquisition(service_id: str, selected_month: str) -> No
                 pass
             return
         except (BrowserAutomationError, Exception) as error:
+            if status_box:
+                status_box.update(label=f"{service.label}の取得に失敗しました。", state="error")
             st.error(f"取得に失敗しました: {error}")
             return
 

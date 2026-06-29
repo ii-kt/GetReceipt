@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -52,6 +53,10 @@ def epos_login_error(summary: dict[str, Any]) -> str:
     )
     if not any(_normalize(phrase) in normalized for phrase in phrases):
         return ""
+    compact_text = re.sub(r"\s+", " ", text).strip()
+    match = re.search(r"(IDまたはパスワード[^。]{0,120}。)", compact_text)
+    if match:
+        return match.group(1)
     for line in text.splitlines():
         compact = line.strip()
         if compact and any(_normalize(phrase) in _normalize(compact) for phrase in phrases):
