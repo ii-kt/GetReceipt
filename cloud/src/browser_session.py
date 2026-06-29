@@ -488,20 +488,7 @@ class ManagedBrowser:
         session_id = self.ensure_page()
         assert self.connection is not None
         for char in text:
-            params = {
-                "key": char,
-                "code": f"Key{char.upper()}" if char.isalpha() and len(char) == 1 else "",
-                "windowsVirtualKeyCode": ord(char.upper()) if char.isascii() and len(char) == 1 else 0,
-                "nativeVirtualKeyCode": ord(char.upper()) if char.isascii() and len(char) == 1 else 0,
-                "text": char,
-                "unmodifiedText": char,
-            }
-            try:
-                self.connection.send("Input.dispatchKeyEvent", {"type": "keyDown", **params}, session_id=session_id)
-                self.connection.send("Input.dispatchKeyEvent", {"type": "char", **params}, session_id=session_id)
-                self.connection.send("Input.dispatchKeyEvent", {"type": "keyUp", **params}, session_id=session_id)
-            except BrowserAutomationError:
-                self.connection.send("Input.insertText", {"text": char}, session_id=session_id)
+            self.connection.send("Input.insertText", {"text": char}, session_id=session_id)
             time.sleep(delay_seconds)
 
     def press_key(self, key: str = "Enter") -> None:
