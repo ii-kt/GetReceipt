@@ -1,5 +1,24 @@
 from __future__ import annotations
 
+import os
+import subprocess
+
+
+def cleanup_orphan_acquisition_browsers() -> None:
+    if os.name != "posix":
+        return
+    for pattern in (
+        "chromium.*--remote-debugging-port",
+        "chrome.*--remote-debugging-port",
+    ):
+        try:
+            subprocess.run(["pkill", "-f", pattern], timeout=2, check=False)
+        except Exception:
+            pass
+
+
+cleanup_orphan_acquisition_browsers()
+
 import streamlit as st
 
 from src.acquisition import acquisition_guidance, default_transaction_date
