@@ -40,6 +40,25 @@ def classify_login_state(summary: dict[str, Any]) -> str:
     return "unknown"
 
 
+def epos_login_error(summary: dict[str, Any]) -> str:
+    text = str(summary.get("text") or "")
+    normalized = _normalize(text)
+    phrases = (
+        "idまたはパスワード",
+        "パスワードまたは",
+        "誤っています",
+        "ログインできません",
+        "入力内容を確認",
+    )
+    if not any(_normalize(phrase) in normalized for phrase in phrases):
+        return ""
+    for line in text.splitlines():
+        compact = line.strip()
+        if compact and any(_normalize(phrase) in _normalize(compact) for phrase in phrases):
+            return compact
+    return "IDまたはパスワードがエポスカード側で拒否されました。"
+
+
 def _login_payload(credentials: dict[str, str]) -> dict[str, str]:
     login_id = (
         credentials.get("login_id")
@@ -201,14 +220,33 @@ class EposAutoFetcher:
             return True
         return False
 
+    def _raise_login_error_if_present(self, summary: dict[str, Any]) -> None:
+        message = epos_login_error(summary)
+        if not message:
+            return
+        raise AcquisitionError(
+            "エポスカードのログインに失敗しました。",
+            code="LOGIN_REJECTED",
+            advice=f"エポスカード側メッセージ: {message} Streamlit Secretsの [epos] login_id / password を確認してください。",
+        )
+
     def _advance_login(self, max_steps: int = 4) -> None:
         for _ in range(max_steps):
             summary = self.browser.page_summary()
+            self._raise_login_error_if_present(summary)
             if classify_login_state(summary) == "logged-in":
                 return
             result = self.browser.evaluate(build_epos_auto_login_expression(self.credentials), timeout=8) or {}
             if not self._apply_login_result(result):
-                return
+                break
+        summary = self.browser.page_summary()
+        self._raise_login_error_if_present(summary)
+        if classify_login_state(summary) != "logged-in":
+            raise AcquisitionError(
+                "エポスカードのログイン完了を確認できませんでした。",
+                code="LOGIN_NOT_CONFIRMED",
+                advice="ログイン画面が残っています。Streamlit Secretsの [epos] login_id / password を確認してください。",
+            )
 
     def _wait_for_login(self, timeout_seconds: float = 90) -> None:
         deadline = time.time() + timeout_seconds
@@ -216,6 +254,7 @@ class EposAutoFetcher:
         last_reason = ""
         while time.time() < deadline:
             summary = self.browser.page_summary()
+            self._raise_login_error_if_present(summary)
             state = classify_login_state(summary)
             last_state = state
             if state == "logged-in":

@@ -68,7 +68,7 @@ class CDPConnection:
                 "ブラウザ操作ライブラリが不足しています。requirements.txtを再インストールしてください。"
             ) from error
 
-        self.websocket = connect(websocket_url, open_timeout=20)
+        self.websocket = connect(websocket_url, open_timeout=20, ping_interval=None)
         self.next_id = 1
 
     def send(
