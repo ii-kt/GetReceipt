@@ -3,7 +3,6 @@ from __future__ import annotations
 import streamlit as st
 
 from src.acquisition import acquisition_guidance, default_transaction_date
-from src.browser_session import BrowserAutomationError, ManagedBrowser
 from src.config import (
     DATA_DIR,
     LEDGER_PATH,
@@ -22,13 +21,6 @@ from src.naming import (
     normalize_extension,
     sha256_bytes,
 )
-from src.receipt_pipeline import (
-    drive_storage_from_secrets,
-    record_not_issued_to_drive,
-    upload_auto_receipt_to_drive,
-)
-from src.epos_automation import AcquisitionError, EposAutoFetcher
-from src.official_site_automation import CommufaAutoFetcher, TokutenAutoFetcher, WebBillingAutoFetcher
 
 st.set_page_config(
     page_title="GetReceipt",
@@ -185,6 +177,8 @@ def login_secrets_configured(service_id: str) -> bool:
 
 
 def automation_browser(service_id: str) -> ManagedBrowser:
+    from src.browser_session import ManagedBrowser
+
     browser_key = f"_automation_browser_{service_id}"
     browser = st.session_state.get(browser_key)
     if browser is None:
@@ -213,12 +207,20 @@ def release_automation_browser(service_id: str, browser: ManagedBrowser, *, clea
 
 def service_fetcher(service_id: str, browser: ManagedBrowser):
     if service_id == "epos":
+        from src.epos_automation import EposAutoFetcher
+
         return EposAutoFetcher(browser, credentials=service_credentials(service_id))
     if service_id == "commufa":
+        from src.official_site_automation import CommufaAutoFetcher
+
         return CommufaAutoFetcher(browser, credentials=service_credentials(service_id))
     if service_id == "tokuten":
+        from src.official_site_automation import TokutenAutoFetcher
+
         return TokutenAutoFetcher(browser, credentials=service_credentials(service_id))
     if service_id == "mobile":
+        from src.official_site_automation import WebBillingAutoFetcher
+
         return WebBillingAutoFetcher(browser, credentials=service_credentials(service_id))
     raise KeyError(service_id)
 
@@ -386,6 +388,9 @@ def render_acquisition_form() -> None:
 
 
 def render_official_auto_acquisition(service_id: str, selected_month: str) -> None:
+    from src.browser_session import BrowserAutomationError
+    from src.epos_automation import AcquisitionError
+
     st.markdown("**取得用ブラウザ**")
     browser = automation_browser(service_id)
     fetcher = service_fetcher(service_id, browser)
@@ -444,6 +449,8 @@ def render_official_auto_acquisition(service_id: str, selected_month: str) -> No
                 status.write("ログイン、明細取得、PDF生成を自動で進めます。")
                 statement = fetcher.fetch_pdf(selected_month)
                 status.write("Google Driveへ保存しています。")
+                from src.receipt_pipeline import drive_storage_from_secrets, upload_auto_receipt_to_drive
+
                 storage = drive_storage_from_secrets(st.secrets)
                 saved = upload_auto_receipt_to_drive(
                     service_id=service_id,
@@ -553,6 +560,8 @@ def render_manual_upload() -> None:
             st.error("金額を入力してください。")
             return
         try:
+            from src.receipt_pipeline import drive_storage_from_secrets
+
             content = uploaded_file.getvalue()
             storage = drive_storage_from_secrets(st.secrets)
             result = storage.upload_bytes(
@@ -581,6 +590,8 @@ def render_manual_upload() -> None:
 
     if cols[1].button(TEXT["mark_not_issued"], use_container_width=True):
         try:
+            from src.receipt_pipeline import drive_storage_from_secrets, record_not_issued_to_drive
+
             storage = drive_storage_from_secrets(st.secrets) if secrets_configured() else None
             record_not_issued_to_drive(
                 service_id=service_id,
