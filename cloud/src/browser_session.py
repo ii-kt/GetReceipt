@@ -344,6 +344,37 @@ class ManagedBrowser:
                 session_id=session_id,
             )
 
+    def drag_at(self, start_x: int, start_y: int, end_x: int, end_y: int, *, steps: int = 18) -> None:
+        session_id = self.ensure_page()
+        assert self.connection is not None
+        self.connection.send(
+            "Input.dispatchMouseEvent",
+            {"type": "mouseMoved", "x": start_x, "y": start_y, "button": "none"},
+            session_id=session_id,
+        )
+        self.connection.send(
+            "Input.dispatchMouseEvent",
+            {"type": "mousePressed", "x": start_x, "y": start_y, "button": "left", "clickCount": 1},
+            session_id=session_id,
+        )
+        steps = max(4, int(steps))
+        for index in range(1, steps + 1):
+            progress = index / steps
+            wiggle = 2 if index % 2 else -2
+            x = round(start_x + (end_x - start_x) * progress)
+            y = round(start_y + (end_y - start_y) * progress + wiggle)
+            self.connection.send(
+                "Input.dispatchMouseEvent",
+                {"type": "mouseMoved", "x": x, "y": y, "button": "left", "buttons": 1},
+                session_id=session_id,
+            )
+            time.sleep(0.025)
+        self.connection.send(
+            "Input.dispatchMouseEvent",
+            {"type": "mouseReleased", "x": end_x, "y": end_y, "button": "left", "clickCount": 1},
+            session_id=session_id,
+        )
+
     def insert_text(self, text: str) -> None:
         session_id = self.ensure_page()
         assert self.connection is not None
