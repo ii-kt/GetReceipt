@@ -388,12 +388,7 @@ def render_acquisition_form() -> None:
 
 
 def render_official_auto_acquisition(service_id: str, selected_month: str) -> None:
-    from src.browser_session import BrowserAutomationError
-    from src.epos_automation import AcquisitionError
-
     st.markdown("**取得用ブラウザ**")
-    browser = automation_browser(service_id)
-    fetcher = service_fetcher(service_id, browser)
     service = service_by_id(service_id)
     image_key = browser_image_key(service_id)
 
@@ -403,6 +398,8 @@ def render_official_auto_acquisition(service_id: str, selected_month: str) -> No
             st.error(f"{service.label}のログインSecretsが未設定です。設定タブの形式でStreamlit Cloud Secretsへ追加してください。")
             return
         status_box = None
+        browser = automation_browser(service_id)
+        fetcher = service_fetcher(service_id, browser)
         try:
             status_box = st.status(f"{service.label}の自動ログインを実行しています。", expanded=True)
             with status_box as status:
@@ -411,21 +408,28 @@ def render_official_auto_acquisition(service_id: str, selected_month: str) -> No
                 status.write("ログイン完了を確認しました。")
                 update_browser_image(service_id, browser)
                 status.update(label=f"{service.label}のログイン完了を確認しました。", state="complete")
+                release_automation_browser(service_id, browser)
         except Exception as error:
             if status_box:
                 status_box.update(label=f"{service.label}の自動ログインに失敗しました。", state="error")
             st.error(f"自動ログインに失敗しました: {error}")
+            release_automation_browser(service_id, browser)
 
     if controls[1].button("画面更新", key=f"refresh_browser:{service_id}", use_container_width=True):
         try:
-            update_browser_image(service_id, browser)
+            browser = st.session_state.get(f"_automation_browser_{service_id}")
+            if browser is None:
+                st.info("取得用ブラウザはまだ起動していません。")
+            else:
+                update_browser_image(service_id, browser)
         except Exception as error:
             st.error(f"画面更新に失敗しました: {error}")
 
     if controls[2].button("セッション終了", key=f"close_browser:{service_id}", use_container_width=True):
         try:
-            browser.close(clear_profile=True)
-            st.session_state.pop(f"_automation_browser_{service_id}", None)
+            browser = st.session_state.get(f"_automation_browser_{service_id}")
+            if browser is not None:
+                release_automation_browser(service_id, browser)
             st.session_state.pop(image_key, None)
             st.success("取得用ブラウザのセッションを終了しました。")
         except Exception as error:
@@ -443,6 +447,11 @@ def render_official_auto_acquisition(service_id: str, selected_month: str) -> No
             st.error(f"{service.label}のログインSecretsが未設定です。設定タブの形式でStreamlit Cloud Secretsへ追加してください。")
             return
         status_box = None
+        from src.browser_session import BrowserAutomationError
+        from src.epos_automation import AcquisitionError
+
+        browser = automation_browser(service_id)
+        fetcher = service_fetcher(service_id, browser)
         try:
             status_box = st.status(f"{service.label}の取得を実行しています。", expanded=True)
             with status_box as status:
