@@ -184,6 +184,7 @@ class ManagedBrowser:
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-background-networking",
+            "--disable-blink-features=AutomationControlled",
             "--disable-breakpad",
             "--disable-crash-reporter",
             "--disable-dev-shm-usage",
@@ -196,6 +197,7 @@ class ManagedBrowser:
             "--metrics-recording-only",
             "--no-sandbox",
             "--no-zygote",
+            "--lang=ja-JP,ja",
             "--window-size=1280,900",
             headless_arg,
             "about:blank",
@@ -273,6 +275,7 @@ class ManagedBrowser:
         self.session_id = attached["sessionId"]
         for method in ("Runtime.enable", "Page.enable", "Network.enable"):
             self.connection.send(method, session_id=self.session_id)
+        self._install_stealth_script()
         return self.session_id
 
     def attach_to_target(self, target_id: str) -> str:
@@ -285,6 +288,7 @@ class ManagedBrowser:
         self.session_id = attached["sessionId"]
         for method in ("Runtime.enable", "Page.enable", "Network.enable"):
             self.connection.send(method, session_id=self.session_id)
+        self._install_stealth_script()
         return self.session_id
 
     def get_targets(self) -> list[dict[str, Any]]:
@@ -334,6 +338,37 @@ class ManagedBrowser:
         remote = result.get("result", {})
         return remote.get("value")
 
+    def _install_stealth_script(self) -> None:
+        assert self.connection is not None
+        assert self.session_id is not None
+        source = """
+(() => {
+  try {
+    Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+    Object.defineProperty(navigator, "languages", { get: () => ["ja-JP", "ja", "en-US", "en"] });
+    Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] });
+    window.chrome = window.chrome || { runtime: {} };
+  } catch (_) {}
+})();
+"""
+        try:
+            self.connection.send(
+                "Page.addScriptToEvaluateOnNewDocument",
+                {"source": source},
+                session_id=self.session_id,
+            )
+        except BrowserAutomationError:
+            pass
+
+    def move_at(self, x: int, y: int) -> None:
+        session_id = self.ensure_page()
+        assert self.connection is not None
+        self.connection.send(
+            "Input.dispatchMouseEvent",
+            {"type": "mouseMoved", "x": x, "y": y, "button": "none"},
+            session_id=session_id,
+        )
+
     def click_at(self, x: int, y: int) -> None:
         session_id = self.ensure_page()
         assert self.connection is not None
@@ -379,6 +414,40 @@ class ManagedBrowser:
         session_id = self.ensure_page()
         assert self.connection is not None
         self.connection.send("Input.insertText", {"text": text}, session_id=session_id)
+
+    def clear_focused_text(self) -> None:
+        session_id = self.ensure_page()
+        assert self.connection is not None
+        ctrl = {"key": "Control", "code": "ControlLeft", "windowsVirtualKeyCode": 17, "nativeVirtualKeyCode": 17}
+        key_a = {"key": "a", "code": "KeyA", "windowsVirtualKeyCode": 65, "nativeVirtualKeyCode": 65, "modifiers": 2}
+        backspace = {"key": "Backspace", "code": "Backspace", "windowsVirtualKeyCode": 8, "nativeVirtualKeyCode": 8}
+        self.connection.send("Input.dispatchKeyEvent", {"type": "rawKeyDown", **ctrl}, session_id=session_id)
+        self.connection.send("Input.dispatchKeyEvent", {"type": "rawKeyDown", **key_a}, session_id=session_id)
+        self.connection.send("Input.dispatchKeyEvent", {"type": "keyUp", **key_a}, session_id=session_id)
+        self.connection.send("Input.dispatchKeyEvent", {"type": "keyUp", **ctrl}, session_id=session_id)
+        time.sleep(0.05)
+        self.connection.send("Input.dispatchKeyEvent", {"type": "rawKeyDown", **backspace}, session_id=session_id)
+        self.connection.send("Input.dispatchKeyEvent", {"type": "keyUp", **backspace}, session_id=session_id)
+
+    def type_text(self, text: str, *, delay_seconds: float = 0.035) -> None:
+        session_id = self.ensure_page()
+        assert self.connection is not None
+        for char in text:
+            params = {
+                "key": char,
+                "code": f"Key{char.upper()}" if char.isalpha() and len(char) == 1 else "",
+                "windowsVirtualKeyCode": ord(char.upper()) if char.isascii() and len(char) == 1 else 0,
+                "nativeVirtualKeyCode": ord(char.upper()) if char.isascii() and len(char) == 1 else 0,
+                "text": char,
+                "unmodifiedText": char,
+            }
+            try:
+                self.connection.send("Input.dispatchKeyEvent", {"type": "keyDown", **params}, session_id=session_id)
+                self.connection.send("Input.dispatchKeyEvent", {"type": "char", **params}, session_id=session_id)
+                self.connection.send("Input.dispatchKeyEvent", {"type": "keyUp", **params}, session_id=session_id)
+            except BrowserAutomationError:
+                self.connection.send("Input.insertText", {"text": char}, session_id=session_id)
+            time.sleep(delay_seconds)
 
     def press_key(self, key: str = "Enter") -> None:
         session_id = self.ensure_page()

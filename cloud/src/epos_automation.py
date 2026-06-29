@@ -182,19 +182,23 @@ const loginLink = [...document.querySelectorAll("a, button, input[type='submit']
     return text.includes("ログイン") || String(el.getAttribute("href") || "").includes("login()");
   });
 if (!loginId || !password || !loginLink) return { ok: false, code: "EPOS_LOGIN_LAYOUT_NOT_FOUND" };
-loginId.value = "";
-password.value = "";
-loginId.dispatchEvent(new Event("input", { bubbles: true }));
-password.dispatchEvent(new Event("input", { bubbles: true }));
 const rect = loginLink.getBoundingClientRect();
 const centerY = Math.round(rect.top + rect.height / 2);
 return {
   ok: true,
   loginIdPoint: pointOf(loginId),
   passwordPoint: pointOf(password),
+  buttonRect: {
+    left: Math.round(rect.left),
+    right: Math.round(rect.right),
+    top: Math.round(rect.top),
+    bottom: Math.round(rect.bottom),
+    width: Math.round(rect.width),
+    height: Math.round(rect.height),
+  },
   buttonPoint: { x: Math.round(rect.left + rect.width / 2), y: centerY },
   bubblePoint: { x: Math.round(rect.right - Math.min(20, rect.width * 0.07)), y: centerY },
-  bubbleDragTarget: { x: Math.round(rect.left + rect.width * 0.58), y: centerY },
+  bubbleDragTarget: { x: Math.round(rect.left + rect.width * 0.95), y: centerY },
 };
 })()"""
 
@@ -285,20 +289,32 @@ class EposAutoFetcher:
             return self._apply_login_result(result)
 
         login_point = layout["loginIdPoint"]
+        self.browser.move_at(int(login_point["x"]) - 20, int(login_point["y"]) - 6)
+        time.sleep(0.08)
         self.browser.click_at(int(login_point["x"]), int(login_point["y"]))
         time.sleep(0.15)
-        self.browser.insert_text(payload["loginId"])
+        self.browser.clear_focused_text()
+        time.sleep(0.08)
+        self.browser.type_text(payload["loginId"])
         time.sleep(0.2)
 
         password_point = layout["passwordPoint"]
+        self.browser.move_at(int(password_point["x"]) - 18, int(password_point["y"]) - 5)
+        time.sleep(0.08)
         self.browser.click_at(int(password_point["x"]), int(password_point["y"]))
         time.sleep(0.15)
-        self.browser.insert_text(payload["password"])
+        self.browser.clear_focused_text()
+        time.sleep(0.08)
+        self.browser.type_text(payload["password"])
         time.sleep(0.3)
 
-        bubble = layout["bubblePoint"]
-        target = layout["bubbleDragTarget"]
-        self.browser.drag_at(int(bubble["x"]), int(bubble["y"]), int(target["x"]), int(target["y"]))
+        button_rect = layout["buttonRect"]
+        button_y = int(layout["buttonPoint"]["y"])
+        sweep_start_x = int(button_rect["left"]) + 24
+        sweep_end_x = int(button_rect["right"]) - 24
+        self.browser.move_at(sweep_start_x, button_y - 8)
+        time.sleep(0.1)
+        self.browser.drag_at(sweep_start_x, button_y, sweep_end_x, button_y, steps=28)
         time.sleep(0.25)
         button = layout["buttonPoint"]
         self.browser.click_at(int(button["x"]), int(button["y"]))
