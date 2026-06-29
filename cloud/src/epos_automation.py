@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -38,26 +40,116 @@ def classify_login_state(summary: dict[str, Any]) -> str:
     return "unknown"
 
 
+def _login_payload(credentials: dict[str, str]) -> dict[str, str]:
+    login_id = (
+        credentials.get("login_id")
+        or credentials.get("email")
+        or credentials.get("id")
+        or credentials.get("user_id")
+        or ""
+    )
+    return {"loginId": login_id, "password": credentials.get("password") or ""}
+
+
+def _script(payload: dict[str, Any], body: str) -> str:
+    return "(() => {\nconst payload = " + json.dumps(payload, ensure_ascii=False) + ";\n" + body + "\n})()"
+
+
+def build_epos_auto_login_expression(credentials: dict[str, str]) -> str:
+    return _script(
+        _login_payload(credentials),
+        r"""
+const normalize = (value) => String(value || "").normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
+const visible = (el) => {
+  if (!el || el.disabled) return false;
+  const style = getComputedStyle(el);
+  const rect = el.getBoundingClientRect();
+  return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+};
+const labelOf = (el) => [el.innerText, el.textContent, el.value, el.placeholder, el.title, el.alt, el.getAttribute && el.getAttribute("aria-label"), el.getAttribute && el.getAttribute("name"), el.getAttribute && el.getAttribute("id")].filter(Boolean).join(" ");
+const contextOf = (el, depth = 4) => {
+  const values = [];
+  let cursor = el;
+  for (let i = 0; cursor && i < depth; i += 1, cursor = cursor.parentElement) values.push(labelOf(cursor));
+  return values.join(" ");
+};
+const pointOf = (el) => {
+  el.scrollIntoView({ block: "center", inline: "center" });
+  const rect = el.getBoundingClientRect();
+  return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+};
+const setValue = (el, value) => {
+  el.focus();
+  if (typeof el.select === "function") el.select();
+  const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+  if (setter) setter.call(el, value);
+  else el.value = value;
+  el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+  el.dispatchEvent(new Event("change", { bubbles: true }));
+};
+const controls = () => [...document.querySelectorAll("button, input[type='button'], input[type='submit'], a, [role='button'], [onclick], [tabindex]")].filter(visible);
+const byText = (words, excludes = []) => controls()
+  .map((el) => ({ el, text: normalize(labelOf(el)) }))
+  .filter((item) => words.some((word) => item.text.includes(normalize(word))))
+  .filter((item) => excludes.every((word) => !item.text.includes(normalize(word))))
+  .sort((a, b) => a.text.length - b.text.length)[0]?.el || null;
+const pageText = normalize(document.body?.innerText || "");
+const securityWords = ["ワンタイム", "認証コード", "確認コード", "セキュリティコード", "本人確認", "秘密の質問", "captcha", "recaptcha"];
+if (securityWords.some((word) => pageText.includes(normalize(word)))) return { attempted: false, code: "SECURITY_CHALLENGE", reason: "追加認証が表示されています。" };
+const passwordInput = [...document.querySelectorAll("input[type='password']")].find(visible);
+const textInputs = [...document.querySelectorAll("input, textarea")]
+  .filter(visible)
+  .filter((input) => ["", "text", "email", "tel"].includes(String(input.type || "").toLowerCase()));
+const accountInput = textInputs
+  .map((input) => {
+    const text = normalize(labelOf(input) + " " + contextOf(input, 5));
+    let score = 0;
+    if (text.includes("id") || text.includes(normalize("ログインID")) || text.includes(normalize("エポスnet"))) score += 260;
+    if (text.includes("mail") || text.includes("email") || text.includes(normalize("メール"))) score += 180;
+    if (text.includes(normalize("検索")) || text.includes("search")) score -= 500;
+    return { input, score };
+  })
+  .filter((item) => item.score > 0)
+  .sort((a, b) => b.score - a.score)[0]?.input || textInputs[0] || null;
+if (accountInput && !String(accountInput.value || "").trim()) {
+  if (!payload.loginId) return { attempted: false, code: "LOGIN_ID_NOT_CONFIGURED", reason: "エポスNet IDが未設定です。" };
+  setValue(accountInput, payload.loginId);
+}
+if (passwordInput) {
+  if (!payload.password && !String(passwordInput.value || "").trim()) return { attempted: false, code: "PASSWORD_NOT_CONFIGURED", reason: "パスワードが未設定です。" };
+  if (payload.password) setValue(passwordInput, payload.password);
+  const button = byText(["ログイン", "login", "送信", "submit", "次へ", "next"], ["戻る", "キャンセル", "お忘れ", "新規", "登録"]);
+  if (button) return { attempted: true, code: "SUBMIT_PASSWORD", click: pointOf(button) };
+  return { attempted: true, code: "SUBMIT_PASSWORD_ENTER", pressEnter: true };
+}
+if (accountInput) {
+  const button = byText(["次へ", "next", "ログイン", "login", "続行", "continue"], ["戻る", "キャンセル", "お忘れ", "新規", "登録"]);
+  if (button) return { attempted: true, code: "SUBMIT_LOGIN_ID", click: pointOf(button) };
+  return { attempted: true, code: "SUBMIT_LOGIN_ID_ENTER", pressEnter: true };
+}
+const loginEntry = byText(["ログイン", "login", "エポスnet"], ["新規", "登録", "お忘れ", "キャンセル"]);
+if (loginEntry) return { attempted: true, code: "CLICK_LOGIN_ENTRY", click: pointOf(loginEntry) };
+return { attempted: false, code: "LOGIN_STEP_NOT_FOUND", reason: "自動ログイン対象の入力欄またはボタンを見つけられませんでした。" };
+""",
+    )
+
+
 class EposAutoFetcher:
-    def __init__(self, browser: ManagedBrowser) -> None:
+    def __init__(self, browser: ManagedBrowser, credentials: dict[str, str] | None = None) -> None:
         self.browser = browser
+        self.credentials = credentials or {}
         self.service = service_by_id("epos")
 
     def open_portal(self) -> dict[str, Any]:
         self.browser.navigate(self.service.portal_url, wait_seconds=1.5)
+        self._wait_for_login(timeout_seconds=45)
         return self.browser.page_summary()
 
     def fetch_pdf(self, target_month: str) -> FetchedStatement:
         year, month = parse_month_key(target_month)
         self.browser.navigate(self.service.portal_url, wait_seconds=1.0)
-        summary = self.browser.page_summary()
-        state = classify_login_state(summary)
-        if state == "login-required":
-            raise AcquisitionError(
-                "エポスカードへのログインが必要です。",
-                code="LOGIN_REQUIRED",
-                advice="取得用ブラウザでログインを完了してから、もう一度取得してください。",
-            )
+        self._wait_for_login()
 
         form = self._prepare_pdf_form(year, month)
         cookies = self.browser.cookies_for(form["action"])
@@ -82,6 +174,47 @@ class EposAutoFetcher:
             original_file_name=f"epos_{target_month}.pdf",
             metadata_text=form["metadataText"],
             logs=tuple(form.get("logs") or ()),
+        )
+
+    def _wait_for_login(self, timeout_seconds: float = 90) -> None:
+        deadline = time.time() + timeout_seconds
+        last_state = "unknown"
+        last_reason = ""
+        while time.time() < deadline:
+            summary = self.browser.page_summary()
+            state = classify_login_state(summary)
+            last_state = state
+            if state == "logged-in":
+                return
+            result = self.browser.evaluate(build_epos_auto_login_expression(self.credentials), timeout=15) or {}
+            code = str(result.get("code") or "")
+            last_reason = str(result.get("reason") or code or "")
+            if code in {"LOGIN_ID_NOT_CONFIGURED", "PASSWORD_NOT_CONFIGURED"}:
+                raise AcquisitionError(
+                    "エポスカードのログインSecretsが未設定です。",
+                    code=code,
+                    advice="Streamlit CloudのSecretsにエポスNet IDとパスワードを設定してください。",
+                )
+            if code == "SECURITY_CHALLENGE":
+                raise AcquisitionError(
+                    "エポスカードで追加認証が表示されました。",
+                    code="SECURITY_CHALLENGE",
+                    advice="ワンタイムコード、CAPTCHA、本人確認などサイト側の追加認証が出ているため、通常ログインの自動入力では続行できません。",
+                )
+            if result.get("attempted") and result.get("click"):
+                click = result["click"]
+                self.browser.click_at(int(click["x"]), int(click["y"]))
+                time.sleep(1.2)
+                continue
+            if result.get("attempted") and result.get("pressEnter"):
+                self.browser.press_key("Enter")
+                time.sleep(1.2)
+                continue
+            time.sleep(1.0)
+        raise AcquisitionError(
+            "エポスカードの自動ログインを完了できませんでした。",
+            code="LOGIN_REQUIRED" if last_state == "login-required" else "LOGIN_TIMEOUT",
+            advice=last_reason or "Streamlit Cloud Secretsのログイン情報とエポスカードのログイン画面を確認してください。",
         )
 
     def _prepare_pdf_form(self, year: int, month: int) -> dict[str, Any]:

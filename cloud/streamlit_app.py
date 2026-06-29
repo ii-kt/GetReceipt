@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from io import BytesIO
-
 import streamlit as st
 
 from src.acquisition import acquisition_guidance, default_transaction_date
@@ -31,13 +29,6 @@ from src.receipt_pipeline import (
 )
 from src.epos_automation import AcquisitionError, EposAutoFetcher
 from src.official_site_automation import CommufaAutoFetcher, TokutenAutoFetcher, WebBillingAutoFetcher
-
-try:
-    from PIL import Image
-    from streamlit_image_coordinates import streamlit_image_coordinates
-except Exception:
-    Image = None
-    streamlit_image_coordinates = None
 
 st.set_page_config(
     page_title="GetReceipt",
@@ -133,6 +124,66 @@ def secrets_configured() -> bool:
         return False
 
 
+CREDENTIAL_SECTIONS: dict[str, tuple[str, ...]] = {
+    "epos": ("epos",),
+    "commufa": ("commufa",),
+    "tokuten": ("tokuten", "outlook", "microsoft"),
+    "mobile": ("webbilling", "mobile", "d_account"),
+}
+
+LOGIN_ID_KEYS = (
+    "login_id",
+    "loginId",
+    "user_id",
+    "userId",
+    "username",
+    "email",
+    "mail",
+    "account",
+    "account_id",
+    "d_account_id",
+    "dAccountId",
+    "id",
+)
+PASSWORD_KEYS = ("password", "pass")
+
+
+def secret_value(section: object, keys: tuple[str, ...]) -> str:
+    for key in keys:
+        try:
+            value = section.get(key)  # type: ignore[attr-defined]
+        except Exception:
+            value = None
+        if value:
+            return str(value)
+    return ""
+
+
+def service_credentials(service_id: str) -> dict[str, str]:
+    try:
+        for section_name in CREDENTIAL_SECTIONS.get(service_id, (service_id,)):
+            if section_name not in st.secrets:
+                continue
+            section = st.secrets[section_name]
+            login_id = secret_value(section, LOGIN_ID_KEYS)
+            password = secret_value(section, PASSWORD_KEYS)
+            return {
+                "login_id": login_id,
+                "id": login_id,
+                "email": login_id,
+                "dAccountId": login_id,
+                "password": password,
+            }
+    except Exception:
+        pass
+    return {}
+
+
+def login_secrets_configured(service_id: str) -> bool:
+    credentials = service_credentials(service_id)
+    return bool(credentials.get("login_id") and credentials.get("password"))
+
+
 def automation_browser(service_id: str) -> ManagedBrowser:
     browser_key = f"_automation_browser_{service_id}"
     browser = st.session_state.get(browser_key)
@@ -155,28 +206,14 @@ def update_browser_image(service_id: str, browser: ManagedBrowser) -> None:
 
 def service_fetcher(service_id: str, browser: ManagedBrowser):
     if service_id == "epos":
-        return EposAutoFetcher(browser)
+        return EposAutoFetcher(browser, credentials=service_credentials(service_id))
     if service_id == "commufa":
-        return CommufaAutoFetcher(browser)
+        return CommufaAutoFetcher(browser, credentials=service_credentials(service_id))
     if service_id == "tokuten":
-        return TokutenAutoFetcher(browser)
+        return TokutenAutoFetcher(browser, credentials=service_credentials(service_id))
     if service_id == "mobile":
-        return WebBillingAutoFetcher(browser, credentials=webbilling_credentials())
+        return WebBillingAutoFetcher(browser, credentials=service_credentials(service_id))
     raise KeyError(service_id)
-
-
-def webbilling_credentials() -> dict[str, str]:
-    try:
-        for section_name in ("webbilling", "mobile", "d_account"):
-            if section_name in st.secrets:
-                section = st.secrets[section_name]
-                return {
-                    "dAccountId": section.get("dAccountId") or section.get("id") or "",
-                    "password": section.get("password") or "",
-                }
-    except Exception:
-        pass
-    return {}
 
 
 def latest_status_by_month(records: list[dict[str, str]]) -> dict[tuple[str, str], dict[str, str]]:
@@ -228,9 +265,9 @@ def render_dashboard() -> bool:
     render_section_heading("Archive index", TEXT["dashboard"], "未取得からそのまま取得へ進む")
     service_names = "、".join(service.label for service in SERVICES)
     st.warning(
-        f"事前準備: {service_names}の各サイトでログインを済ませてから取得してください。"
+        f"事前準備: Streamlit Cloud Secretsに{service_names}のログイン情報を設定してください。"
         "未取得を押すと、この画面内の取得フォームに対象月とサービスを反映します。"
-        "下のログイン画面を開いて認証を完了してから取得操作へ進んでください。"
+        "ログイン情報は取得用ブラウザへ自動入力されます。"
     )
 
     acquisition_active = bool(st.session_state.get("_acq_active_from_status"))
@@ -329,8 +366,8 @@ def render_acquisition_form() -> None:
     guidance = acquisition_guidance(selected_service, selected_month)
 
     st.info(
-        f"取得前に、取得用ブラウザで{service.label}のログインを完了してください。"
-        "ログイン済みならそのままPDF取得とDrive保存へ進めます。"
+        f"{service.label}のログイン情報はStreamlit Secretsから読み込み、取得用ブラウザへ自動入力します。"
+        "Secrets未設定のサービスは取得前に停止します。"
     )
     st.markdown(f"**{guidance.heading}**")
     st.code(guidance.target_hint, language="text")
@@ -348,14 +385,17 @@ def render_official_auto_acquisition(service_id: str, selected_month: str) -> No
     service = service_by_id(service_id)
     image_key = browser_image_key(service_id)
 
-    controls = st.columns([1, 1, 1, 1])
-    if controls[0].button("ログイン画面を開く", key=f"open_browser:{service_id}", type="primary", use_container_width=True):
+    controls = st.columns([1, 1, 1])
+    if controls[0].button("自動ログイン開始", key=f"open_browser:{service_id}", type="primary", use_container_width=True):
+        if not login_secrets_configured(service_id):
+            st.error(f"{service.label}のログインSecretsが未設定です。設定タブの形式でStreamlit Cloud Secretsへ追加してください。")
+            return
         try:
             fetcher.open_portal()
             update_browser_image(service_id, browser)
-            st.success(f"{service.label}のログイン画面を開きました。下の画面で認証を完了してください。")
+            st.success(f"{service.label}の自動ログインを開始しました。")
         except Exception as error:
-            st.error(f"ログイン画面を開けませんでした: {error}")
+            st.error(f"自動ログインに失敗しました: {error}")
 
     if controls[1].button("画面更新", key=f"refresh_browser:{service_id}", use_container_width=True):
         try:
@@ -363,14 +403,7 @@ def render_official_auto_acquisition(service_id: str, selected_month: str) -> No
         except Exception as error:
             st.error(f"画面更新に失敗しました: {error}")
 
-    if controls[2].button("Enter", key=f"enter_browser:{service_id}", use_container_width=True):
-        try:
-            browser.press_key("Enter")
-            update_browser_image(service_id, browser)
-        except Exception as error:
-            st.error(f"キー入力に失敗しました: {error}")
-
-    if controls[3].button("セッション終了", key=f"close_browser:{service_id}", use_container_width=True):
+    if controls[2].button("セッション終了", key=f"close_browser:{service_id}", use_container_width=True):
         try:
             browser.close(clear_profile=True)
             st.session_state.pop(f"_automation_browser_{service_id}", None)
@@ -381,45 +414,14 @@ def render_official_auto_acquisition(service_id: str, selected_month: str) -> No
 
     image_bytes = st.session_state.get(image_key)
     if image_bytes:
-        if Image is not None and streamlit_image_coordinates is not None:
-            image = Image.open(BytesIO(image_bytes))
-            coordinates = streamlit_image_coordinates(image, key=f"{service_id}-browser-image")
-            if coordinates:
-                point = (int(coordinates["x"]), int(coordinates["y"]))
-                click_key = f"_last_browser_click_{service_id}"
-                if st.session_state.get(click_key) != point:
-                    try:
-                        browser.click_at(point[0], point[1])
-                        st.session_state[click_key] = point
-                        update_browser_image(service_id, browser)
-                    except Exception as error:
-                        st.error(f"クリック操作に失敗しました: {error}")
-        else:
-            st.image(image_bytes)
-            st.caption("画像クリック用ライブラリがないため、下の座標入力で操作してください。")
-
-    click_cols = st.columns([1, 1, 1])
-    x = click_cols[0].number_input("X", min_value=0, value=0, step=1, key=f"x:{service_id}")
-    y = click_cols[1].number_input("Y", min_value=0, value=0, step=1, key=f"y:{service_id}")
-    if click_cols[2].button("座標クリック", key=f"click_browser:{service_id}", use_container_width=True):
-        try:
-            browser.click_at(int(x), int(y))
-            update_browser_image(service_id, browser)
-        except Exception as error:
-            st.error(f"クリック操作に失敗しました: {error}")
-
-    input_cols = st.columns([2, 1])
-    text = input_cols[0].text_input("取得用ブラウザへ入力", type="password", key=f"text_input:{service_id}")
-    if input_cols[1].button("入力", key=f"insert_browser:{service_id}", use_container_width=True):
-        try:
-            browser.insert_text(text)
-            update_browser_image(service_id, browser)
-        except Exception as error:
-            st.error(f"テキスト入力に失敗しました: {error}")
+        st.image(image_bytes)
 
     if st.button("PDFを取得してDriveへ保存", key=f"fetch_pdf:{service_id}", type="primary", use_container_width=True):
         if not secrets_configured():
             st.error("Google Drive用のSecretsが未設定です。先に設定してください。")
+            return
+        if not login_secrets_configured(service_id):
+            st.error(f"{service.label}のログインSecretsが未設定です。設定タブの形式でStreamlit Cloud Secretsへ追加してください。")
             return
         try:
             statement = fetcher.fetch_pdf(selected_month)
@@ -591,6 +593,34 @@ def render_settings() -> None:
     else:
         st.warning("Google Drive用のStreamlit Secretsが未設定です。")
     st.caption("保存台帳はGoogle Driveの `_receipt_index.csv` にも同期されます。")
+
+    st.write("ログインSecrets")
+    for service in SERVICES:
+        if login_secrets_configured(service.id):
+            st.success(f"{service.label}: 設定済み")
+        else:
+            st.warning(f"{service.label}: 未設定")
+    st.code(
+        """
+[epos]
+login_id = "エポスNet ID"
+password = "エポスNetパスワード"
+
+[commufa]
+login_id = "Myコミュファ ログインIDまたはメールアドレス"
+password = "Myコミュファ パスワード"
+
+[tokuten]
+email = "Outlook / Microsoftアカウント"
+password = "Outlook / Microsoftパスワード"
+
+[webbilling]
+d_account_id = "dアカウントID"
+password = "dアカウントパスワード"
+""".strip(),
+        language="toml",
+    )
+    st.caption("Secretsの実値は画面に表示しません。GitHubには入れず、Streamlit CloudのSecretsに設定してください。")
 
 
 def _mime_type(extension: str) -> str:

@@ -6,6 +6,7 @@ __pycache__/
 *.pyc
 .streamlit/secrets.toml
 cloud/.streamlit/secrets.toml
+.env
 *.log
 
 

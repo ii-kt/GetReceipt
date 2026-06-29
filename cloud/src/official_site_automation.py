@@ -165,27 +165,61 @@ def assert_commufa_usage_month(content: bytes, target_month: str) -> None:
         )
 
 
+def _login_payload(credentials: dict[str, str]) -> dict[str, str]:
+    login_id = (
+        credentials.get("login_id")
+        or credentials.get("email")
+        or credentials.get("dAccountId")
+        or credentials.get("d_account_id")
+        or credentials.get("id")
+        or ""
+    )
+    return {"loginId": login_id, "password": credentials.get("password") or ""}
+
+
+def _apply_auto_login_result(browser: ManagedBrowser, result: dict[str, Any], service_label: str) -> bool:
+    code = str(result.get("code") or "")
+    if code in {"LOGIN_ID_NOT_CONFIGURED", "D_ACCOUNT_ID_NOT_CONFIGURED", "PASSWORD_NOT_CONFIGURED"}:
+        raise AcquisitionError(
+            f"{service_label}のログインSecretsが未設定です。",
+            code=code,
+            advice="Streamlit CloudのSecretsに対象サービスのID/メールアドレスとパスワードを設定してください。",
+        )
+    if code in {"SECURITY_CHALLENGE", "WAIT_SECURITY_CODE"} or result.get("waitingForSecurityCode"):
+        raise AcquisitionError(
+            f"{service_label}で追加認証が表示されました。",
+            code="SECURITY_CHALLENGE",
+            advice="ワンタイムコード、CAPTCHA、本人確認などサイト側の追加認証が出ているため、通常ログインの自動入力では続行できません。",
+        )
+    if result.get("attempted") and result.get("click"):
+        click = result["click"]
+        browser.click_at(int(click["x"]), int(click["y"]))
+        time.sleep(1.2)
+        return True
+    if result.get("attempted") and result.get("pressEnter"):
+        browser.press_key("Enter")
+        time.sleep(1.2)
+        return True
+    return False
+
+
 class CommufaAutoFetcher:
-    def __init__(self, browser: ManagedBrowser) -> None:
+    def __init__(self, browser: ManagedBrowser, credentials: dict[str, str] | None = None) -> None:
         self.browser = browser
+        self.credentials = credentials or {}
         self.service = service_by_id("commufa")
         self.config = SERVICE_AUTOMATION_CONFIGS["commufa"]
 
     def open_portal(self) -> dict[str, Any]:
         self.browser.navigate(self.config.target_url, wait_seconds=1.5)
+        self._wait_for_login(timeout_seconds=45)
         return self.browser.page_summary()
 
     def fetch_pdf(self, target_month: str) -> FetchedStatement:
         year, month = parse_month_key(target_month)
         self.browser.clear_downloads()
         self.browser.navigate(self.config.target_url, wait_seconds=1.5)
-        summary = self.browser.page_summary()
-        if classify_configured_login_state(summary, self.config) == "login-required":
-            raise AcquisitionError(
-                "コミュファへのログインが必要です。",
-                code="LOGIN_REQUIRED",
-                advice="取得用ブラウザでMyコミュファにログインしてから、もう一度取得してください。",
-            )
+        self._wait_for_login()
 
         metadata_texts: list[str] = []
         logs: list[str] = []
@@ -236,15 +270,38 @@ class CommufaAutoFetcher:
             logs=tuple(logs),
         )
 
+    def _wait_for_login(self, timeout_seconds: float = 90) -> None:
+        deadline = time.time() + timeout_seconds
+        last_state = "unknown"
+        last_reason = ""
+        while time.time() < deadline:
+            summary = self.browser.page_summary()
+            state = classify_configured_login_state(summary, self.config)
+            last_state = state
+            if state == "logged-in":
+                return
+            result = self.browser.evaluate(build_configured_auto_login_expression(self.credentials), timeout=15) or {}
+            last_reason = str(result.get("reason") or result.get("code") or "")
+            if _apply_auto_login_result(self.browser, result, self.service.label):
+                continue
+            time.sleep(1.0)
+        raise AcquisitionError(
+            "コミュファの自動ログインを完了できませんでした。",
+            code="LOGIN_REQUIRED" if last_state == "login-required" else "LOGIN_TIMEOUT",
+            advice=last_reason or "Streamlit Cloud Secretsのログイン情報とコミュファのログイン画面を確認してください。",
+        )
+
 
 class TokutenAutoFetcher:
-    def __init__(self, browser: ManagedBrowser) -> None:
+    def __init__(self, browser: ManagedBrowser, credentials: dict[str, str] | None = None) -> None:
         self.browser = browser
+        self.credentials = credentials or {}
         self.service = service_by_id("tokuten")
         self.config = SERVICE_AUTOMATION_CONFIGS["tokuten"]
 
     def open_portal(self) -> dict[str, Any]:
         self.browser.navigate(self.config.target_url, wait_seconds=2.0)
+        self._wait_for_mailbox(timeout_seconds=45)
         return self.browser.page_summary()
 
     def fetch_pdf(self, target_month: str) -> FetchedStatement:
@@ -304,18 +361,15 @@ class TokutenAutoFetcher:
             summary = self.browser.page_summary()
             state = classify_tokuten_login_state(summary)
             last_state = state
-            if state == "login-required":
-                result = self.browser.evaluate(build_microsoft_auto_login_expression(), timeout=15) or {}
-                if result.get("attempted") and result.get("click"):
-                    click = result["click"]
-                    self.browser.click_at(int(click["x"]), int(click["y"]))
-                    time.sleep(1.0)
+            if state in {"login-required", "loading", "unknown"}:
+                result = self.browser.evaluate(build_microsoft_auto_login_expression(self.credentials), timeout=15) or {}
+                if _apply_auto_login_result(self.browser, result, self.service.label):
                     continue
             time.sleep(1.0)
         raise AcquisitionError(
             "Outlook Webのログイン完了を検出できませんでした。",
             code="LOGIN_REQUIRED" if last_state == "login-required" else "MAILBOX_NOT_READY",
-            advice="取得用ブラウザでOutlook WebのMicrosoftログインを完了してから、もう一度取得してください。",
+            advice="Streamlit Cloud SecretsのMicrosoft/Outlookログイン情報とOutlook Webのログイン画面を確認してください。",
         )
 
     def _search_mail(self, target_month: str) -> None:
@@ -358,6 +412,7 @@ class WebBillingAutoFetcher:
 
     def open_portal(self) -> dict[str, Any]:
         self.browser.navigate(self.config.target_url, wait_seconds=1.5)
+        self._wait_for_login(timeout_seconds=45)
         return self.browser.page_summary()
 
     def fetch_pdf(self, target_month: str) -> FetchedStatement:
@@ -423,6 +478,10 @@ class WebBillingAutoFetcher:
             if state == "logged-in":
                 return
             auto_login = self.browser.evaluate(build_webbilling_auto_login_expression(self.credentials), timeout=15) or {}
+            if auto_login.get("code") in {"PASSWORD_NOT_CONFIGURED", "D_ACCOUNT_ID_NOT_CONFIGURED"}:
+                _apply_auto_login_result(self.browser, auto_login, self.service.label)
+            if auto_login.get("waitingForSecurityCode"):
+                _apply_auto_login_result(self.browser, auto_login, self.service.label)
             if auto_login.get("attempted") and auto_login.get("click"):
                 click = auto_login["click"]
                 self.browser.click_at(int(click["x"]), int(click["y"]))
@@ -582,8 +641,92 @@ return Boolean(searchBox) && mailboxLoaded;
 })()"""
 
 
-def build_microsoft_auto_login_expression() -> str:
-    return r"""(() => {
+def build_configured_auto_login_expression(credentials: dict[str, str]) -> str:
+    return _script(
+        _login_payload(credentials),
+        r"""
+const normalize = (value) => String(value || "").normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
+const visible = (el) => {
+  if (!el || el.disabled) return false;
+  const style = getComputedStyle(el);
+  const rect = el.getBoundingClientRect();
+  return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+};
+const labelOf = (el) => [el.innerText, el.textContent, el.value, el.placeholder, el.title, el.alt, el.getAttribute && el.getAttribute("aria-label"), el.getAttribute && el.getAttribute("name"), el.getAttribute && el.getAttribute("id")].filter(Boolean).join(" ");
+const contextOf = (el, depth = 4) => {
+  const values = [];
+  let cursor = el;
+  for (let i = 0; cursor && i < depth; i += 1, cursor = cursor.parentElement) values.push(labelOf(cursor));
+  return values.join(" ");
+};
+const pointOf = (el) => {
+  el.scrollIntoView({ block: "center", inline: "center" });
+  const rect = el.getBoundingClientRect();
+  return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+};
+const setValue = (el, value) => {
+  el.focus();
+  if (typeof el.select === "function") el.select();
+  const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+  if (setter) setter.call(el, value);
+  else el.value = value;
+  el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+  el.dispatchEvent(new Event("change", { bubbles: true }));
+};
+const controls = () => [...document.querySelectorAll("button, input[type='button'], input[type='submit'], a, [role='button'], [onclick], [tabindex]")].filter(visible);
+const byText = (words, excludes = []) => controls()
+  .map((el) => ({ el, text: normalize(labelOf(el)) }))
+  .filter((item) => words.some((word) => item.text.includes(normalize(word))))
+  .filter((item) => excludes.every((word) => !item.text.includes(normalize(word))))
+  .sort((a, b) => a.text.length - b.text.length)[0]?.el || null;
+const pageText = normalize(document.body?.innerText || "");
+const securityWords = ["ワンタイム", "認証コード", "確認コード", "セキュリティコード", "本人確認", "captcha", "recaptcha"];
+if (securityWords.some((word) => pageText.includes(normalize(word)))) return { attempted: false, code: "SECURITY_CHALLENGE", reason: "追加認証が表示されています。" };
+const passwordInput = [...document.querySelectorAll("input[type='password']")].find(visible);
+const textInputs = [...document.querySelectorAll("input, textarea")]
+  .filter(visible)
+  .filter((input) => ["", "text", "email", "tel"].includes(String(input.type || "").toLowerCase()));
+const accountInput = textInputs
+  .map((input) => {
+    const text = normalize(labelOf(input) + " " + contextOf(input, 5));
+    let score = 0;
+    if (text.includes("id") || text.includes(normalize("ログインID"))) score += 260;
+    if (text.includes("mail") || text.includes("email") || text.includes(normalize("メール"))) score += 220;
+    if (text.includes("account") || text.includes(normalize("アカウント"))) score += 180;
+    if (String(input.type || "").toLowerCase() === "email") score += 120;
+    if (text.includes(normalize("検索")) || text.includes("search")) score -= 500;
+    return { input, score };
+  })
+  .filter((item) => item.score > 0)
+  .sort((a, b) => b.score - a.score)[0]?.input || textInputs[0] || null;
+if (accountInput && !String(accountInput.value || "").trim()) {
+  if (!payload.loginId) return { attempted: false, code: "LOGIN_ID_NOT_CONFIGURED", reason: "ログインIDまたはメールアドレスが未設定です。" };
+  setValue(accountInput, payload.loginId);
+}
+if (passwordInput) {
+  if (!payload.password && !String(passwordInput.value || "").trim()) return { attempted: false, code: "PASSWORD_NOT_CONFIGURED", reason: "パスワードが未設定です。" };
+  if (payload.password) setValue(passwordInput, payload.password);
+  const button = byText(["ログイン", "login", "サインイン", "sign in", "送信", "submit", "次へ", "next"], ["戻る", "キャンセル", "お忘れ", "新規", "登録"]);
+  if (button) return { attempted: true, code: "SUBMIT_PASSWORD", click: pointOf(button) };
+  return { attempted: true, code: "SUBMIT_PASSWORD_ENTER", pressEnter: true };
+}
+if (accountInput) {
+  const button = byText(["次へ", "next", "ログイン", "login", "サインイン", "sign in", "続行", "continue"], ["戻る", "キャンセル", "お忘れ", "新規", "登録"]);
+  if (button) return { attempted: true, code: "SUBMIT_LOGIN_ID", click: pointOf(button) };
+  return { attempted: true, code: "SUBMIT_LOGIN_ID_ENTER", pressEnter: true };
+}
+const loginEntry = byText(["ログイン", "login", "サインイン", "sign in"], ["新規", "登録", "お忘れ", "キャンセル"]);
+if (loginEntry) return { attempted: true, code: "CLICK_LOGIN_ENTRY", click: pointOf(loginEntry) };
+return { attempted: false, code: "LOGIN_STEP_NOT_FOUND", reason: "自動ログイン対象の入力欄またはボタンを見つけられませんでした。" };
+""",
+    )
+
+
+def build_microsoft_auto_login_expression(credentials: dict[str, str]) -> str:
+    return _script(
+        _login_payload(credentials),
+        r"""
 const normalize = (value) => String(value || "").normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
 const visible = (el) => {
   if (!el || el.disabled) return false;
@@ -597,21 +740,34 @@ const pointOf = (el) => {
   const rect = el.getBoundingClientRect();
   return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
 };
+const setValue = (el, value) => {
+  el.focus();
+  if (typeof el.select === "function") el.select();
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+  if (setter) setter.call(el, value);
+  else el.value = value;
+  el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+  el.dispatchEvent(new Event("change", { bubbles: true }));
+};
 const controls = () => [...document.querySelectorAll("button, input[type='button'], input[type='submit'], a, [role='button']")].filter(visible);
 const byText = (words, excludes = []) => controls()
   .map((el) => ({ el, text: normalize(labelOf(el)) }))
   .filter((item) => words.some((word) => item.text.includes(normalize(word))))
   .filter((item) => excludes.every((word) => !item.text.includes(normalize(word))))
   .sort((a, b) => a.text.length - b.text.length)[0]?.el || null;
+const pageText = normalize(document.body?.innerText || "");
+const securityWords = ["ワンタイム", "認証コード", "確認コード", "セキュリティコード", "本人確認", "captcha", "recaptcha"];
+if (securityWords.some((word) => pageText.includes(normalize(word)))) return { attempted: false, code: "SECURITY_CHALLENGE", reason: "追加認証が表示されています。" };
 const submit = document.querySelector("#idSIButton9, input[type='submit']");
 const staySignedIn = byText(["はい", "yes", "続行", "continue", "サインインの状態を維持"], ["いいえ", "no"]);
-if (staySignedIn) return { attempted: true, action: "stay-signed-in", click: pointOf(staySignedIn) };
+if (staySignedIn) return { attempted: true, code: "STAY_SIGNED_IN", click: pointOf(staySignedIn) };
 const passwordInput = [...document.querySelectorAll("input[type='password']")].find(visible);
 if (passwordInput) {
-  if (!String(passwordInput.value || "").trim()) return { attempted: false, reason: "Microsoftログイン画面のパスワード欄が未入力です。" };
+  if (!payload.password && !String(passwordInput.value || "").trim()) return { attempted: false, code: "PASSWORD_NOT_CONFIGURED", reason: "Microsoftログインのパスワードが未設定です。" };
+  if (payload.password) setValue(passwordInput, payload.password);
   const button = (submit && visible(submit)) ? submit : byText(["サインイン", "sign in", "ログイン", "login", "次へ", "next"]);
-  if (!button) return { attempted: false, reason: "Microsoftログイン画面の送信ボタンを見つけられませんでした。" };
-  return { attempted: true, action: "submit-password", click: pointOf(button) };
+  if (!button) return { attempted: true, code: "SUBMIT_PASSWORD_ENTER", pressEnter: true };
+  return { attempted: true, code: "SUBMIT_PASSWORD", click: pointOf(button) };
 }
 const accountInput = [...document.querySelectorAll("input[type='email'], input[name='loginfmt'], input[type='text']")]
   .filter(visible)
@@ -620,13 +776,15 @@ const accountInput = [...document.querySelectorAll("input[type='email'], input[n
     return label.includes("メール") || label.includes("email") || label.includes("account") || label.includes("login");
   });
 if (accountInput) {
-  if (!String(accountInput.value || "").trim()) return { attempted: false, reason: "Microsoftログイン画面のアカウント欄が未入力です。" };
+  if (!payload.loginId && !String(accountInput.value || "").trim()) return { attempted: false, code: "LOGIN_ID_NOT_CONFIGURED", reason: "Microsoftログインのアカウントが未設定です。" };
+  if (payload.loginId) setValue(accountInput, payload.loginId);
   const button = (submit && visible(submit)) ? submit : byText(["次へ", "next", "続行", "continue"]);
-  if (!button) return { attempted: false, reason: "Microsoftログイン画面の次へボタンを見つけられませんでした。" };
-  return { attempted: true, action: "submit-account", click: pointOf(button) };
+  if (!button) return { attempted: true, code: "SUBMIT_LOGIN_ID_ENTER", pressEnter: true };
+  return { attempted: true, code: "SUBMIT_LOGIN_ID", click: pointOf(button) };
 }
-return { attempted: false, reason: "自動で押せるMicrosoftログイン操作は見つかりませんでした。" };
-})()"""
+return { attempted: false, code: "LOGIN_STEP_NOT_FOUND", reason: "自動で押せるMicrosoftログイン操作は見つかりませんでした。" };
+""",
+    )
 
 
 def build_outlook_search_expression(query: str) -> str:
@@ -825,7 +983,17 @@ return { ok: false, code: "MAIL_NOT_FOUND", message: year + "/" + monthPad + " �
 
 def build_webbilling_auto_login_expression(credentials: dict[str, str]) -> str:
     return _script(
-        {"dAccountId": credentials.get("dAccountId") or credentials.get("id") or "", "password": credentials.get("password") or ""},
+        {
+            "dAccountId": (
+                credentials.get("dAccountId")
+                or credentials.get("d_account_id")
+                or credentials.get("login_id")
+                or credentials.get("email")
+                or credentials.get("id")
+                or ""
+            ),
+            "password": credentials.get("password") or "",
+        },
         r"""
 const normalize = (value) => String(value || "").normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
 const visible = (el) => {
