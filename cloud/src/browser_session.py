@@ -119,6 +119,7 @@ class ManagedBrowser:
         self.connection: CDPConnection | None = None
         self.target_id: str | None = None
         self.session_id: str | None = None
+        self.stderr_path = self.download_dir / "chromium-stderr.log"
 
     def ensure_started(self) -> None:
         if self.process is not None and self.process.poll() is not None:
@@ -139,24 +140,7 @@ class ManagedBrowser:
             self.port = find_free_port()
 
         if self.process is None:
-            args = [
-                executable,
-                f"--remote-debugging-port={self.port}",
-                f"--user-data-dir={self.profile_dir}",
-                "--no-first-run",
-                "--no-default-browser-check",
-                "--disable-popup-blocking",
-                "--disable-breakpad",
-                "--disable-crash-reporter",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--disable-features=Crashpad",
-                "--window-size=1280,900",
-                "--headless=new",
-                "--no-sandbox",
-            ]
-            args.append("about:blank")
-            self.process = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self._start_browser_with_fallbacks(executable)
 
         if self.connection is None:
             version = self._wait_for_version()
@@ -174,19 +158,103 @@ class ManagedBrowser:
                 pass
             self.connection.send("Target.setDiscoverTargets", {"discover": True})
 
+    def _start_browser_with_fallbacks(self, executable: str) -> None:
+        errors: list[str] = []
+        for headless_arg in ("--headless=new", "--headless"):
+            self._cleanup_profile_locks()
+            self._launch_browser(executable, headless_arg)
+            try:
+                self._wait_for_version()
+                return
+            except BrowserAutomationError as error:
+                errors.append(str(error))
+                self._stop_process()
+                self.port = find_free_port()
+        raise BrowserAutomationError("取得用ブラウザを起動できませんでした: " + " / ".join(errors[-2:]))
+
+    def _launch_browser(self, executable: str, headless_arg: str) -> None:
+        assert self.port is not None
+        self.stderr_path.parent.mkdir(parents=True, exist_ok=True)
+        self.stderr_path.write_text("", encoding="utf-8")
+        args = [
+            executable,
+            f"--remote-debugging-port={self.port}",
+            "--remote-debugging-address=127.0.0.1",
+            f"--user-data-dir={self.profile_dir}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-background-networking",
+            "--disable-breakpad",
+            "--disable-crash-reporter",
+            "--disable-dev-shm-usage",
+            "--disable-extensions",
+            "--disable-features=Crashpad",
+            "--disable-gpu",
+            "--disable-popup-blocking",
+            "--disable-setuid-sandbox",
+            "--disable-sync",
+            "--metrics-recording-only",
+            "--no-sandbox",
+            "--no-zygote",
+            "--window-size=1280,900",
+            headless_arg,
+            "about:blank",
+        ]
+        stderr_handle = self.stderr_path.open("ab")
+        try:
+            self.process = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=stderr_handle)
+        finally:
+            stderr_handle.close()
+
+    def _cleanup_profile_locks(self) -> None:
+        self.profile_dir.mkdir(parents=True, exist_ok=True)
+        for name in ("SingletonLock", "SingletonSocket", "SingletonCookie", "LOCK"):
+            try:
+                (self.profile_dir / name).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    def _stop_process(self) -> None:
+        if self.process and self.process.poll() is None:
+            try:
+                self.process.terminate()
+                self.process.wait(timeout=3)
+            except Exception:
+                try:
+                    self.process.kill()
+                except Exception:
+                    pass
+        self.process = None
+
+    def _stderr_tail(self) -> str:
+        try:
+            text = self.stderr_path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            return ""
+        text = text.strip()
+        if not text:
+            return ""
+        return text[-1200:]
+
     def _wait_for_version(self) -> dict[str, Any]:
         assert self.port is not None
         url = f"http://127.0.0.1:{self.port}/json/version"
         deadline = time.time() + 30
         last_error: Exception | None = None
         while time.time() < deadline:
+            if self.process is not None and self.process.poll() is not None:
+                detail = self._stderr_tail()
+                suffix = f" / Chromium stderr: {detail}" if detail else ""
+                raise BrowserAutomationError(f"取得用ブラウザが起動直後に終了しました(exit {self.process.returncode}){suffix}")
             try:
                 with urllib.request.urlopen(url, timeout=2) as response:
                     return json.loads(response.read().decode("utf-8"))
             except Exception as error:
                 last_error = error
                 time.sleep(0.25)
-        raise BrowserAutomationError(f"取得用ブラウザに接続できませんでした: {last_error}")
+        detail = self._stderr_tail()
+        suffix = f" / Chromium stderr: {detail}" if detail else ""
+        raise BrowserAutomationError(f"取得用ブラウザに接続できませんでした: {last_error}{suffix}")
 
     def ensure_page(self) -> str:
         self.ensure_started()
