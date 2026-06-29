@@ -18,6 +18,14 @@ class BrowserAutomationError(RuntimeError):
     pass
 
 
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/149.0.0.0 Safari/537.36"
+)
+ACCEPT_LANGUAGE = "ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7"
+
+
 def _path_exists(value: str | None) -> str | None:
     if not value:
         return None
@@ -198,6 +206,8 @@ class ManagedBrowser:
             "--no-sandbox",
             "--no-zygote",
             "--lang=ja-JP,ja",
+            f"--accept-lang={ACCEPT_LANGUAGE}",
+            f"--user-agent={DEFAULT_USER_AGENT}",
             "--window-size=1280,900",
             headless_arg,
             "about:blank",
@@ -275,6 +285,7 @@ class ManagedBrowser:
         self.session_id = attached["sessionId"]
         for method in ("Runtime.enable", "Page.enable", "Network.enable"):
             self.connection.send(method, session_id=self.session_id)
+        self._apply_environment_overrides()
         self._install_stealth_script()
         return self.session_id
 
@@ -288,6 +299,7 @@ class ManagedBrowser:
         self.session_id = attached["sessionId"]
         for method in ("Runtime.enable", "Page.enable", "Network.enable"):
             self.connection.send(method, session_id=self.session_id)
+        self._apply_environment_overrides()
         self._install_stealth_script()
         return self.session_id
 
@@ -338,6 +350,47 @@ class ManagedBrowser:
         remote = result.get("result", {})
         return remote.get("value")
 
+    def _apply_environment_overrides(self) -> None:
+        assert self.connection is not None
+        assert self.session_id is not None
+        try:
+            self.connection.send(
+                "Network.setUserAgentOverride",
+                {
+                    "userAgent": DEFAULT_USER_AGENT,
+                    "acceptLanguage": ACCEPT_LANGUAGE,
+                    "platform": "Windows",
+                    "userAgentMetadata": {
+                        "brands": [
+                            {"brand": "Google Chrome", "version": "149"},
+                            {"brand": "Chromium", "version": "149"},
+                            {"brand": "Not A(Brand", "version": "24"},
+                        ],
+                        "fullVersionList": [
+                            {"brand": "Google Chrome", "version": "149.0.0.0"},
+                            {"brand": "Chromium", "version": "149.0.0.0"},
+                            {"brand": "Not A(Brand", "version": "24.0.0.0"},
+                        ],
+                        "platform": "Windows",
+                        "platformVersion": "19.0.0",
+                        "architecture": "x86",
+                        "model": "",
+                        "mobile": False,
+                    },
+                },
+                session_id=self.session_id,
+            )
+        except BrowserAutomationError:
+            pass
+        for method, params in (
+            ("Emulation.setLocaleOverride", {"locale": "ja-JP"}),
+            ("Emulation.setTimezoneOverride", {"timezoneId": "Asia/Tokyo"}),
+        ):
+            try:
+                self.connection.send(method, params, session_id=self.session_id)
+            except BrowserAutomationError:
+                pass
+
     def _install_stealth_script(self) -> None:
         assert self.connection is not None
         assert self.session_id is not None
@@ -347,6 +400,8 @@ class ManagedBrowser:
     Object.defineProperty(navigator, "webdriver", { get: () => undefined });
     Object.defineProperty(navigator, "languages", { get: () => ["ja-JP", "ja", "en-US", "en"] });
     Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] });
+    Object.defineProperty(navigator, "platform", { get: () => "Win32" });
+    Object.defineProperty(navigator, "vendor", { get: () => "Google Inc." });
     window.chrome = window.chrome || { runtime: {} };
   } catch (_) {}
 })();
