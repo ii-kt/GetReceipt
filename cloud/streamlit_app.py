@@ -155,7 +155,7 @@ def secret_value(section: object, keys: tuple[str, ...]) -> str:
         except Exception:
             value = None
         if value:
-            return str(value)
+            return str(value).strip()
     return ""
 
 

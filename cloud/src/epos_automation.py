@@ -203,11 +203,36 @@ return {
 })()"""
 
 
+def build_epos_login_diagnostics_expression(credentials: dict[str, str]) -> str:
+    return _script(
+        _login_payload(credentials),
+        r"""
+const loginId = document.querySelector("input[name='loginId']");
+const password = document.querySelector("input[name='passWord']");
+const cookieNames = document.cookie.split(";").map((value) => value.trim().split("=")[0]).filter(Boolean);
+return {
+  loginIdMatches: !!loginId && String(loginId.value || "") === payload.loginId,
+  loginIdLength: loginId ? String(loginId.value || "").length : 0,
+  expectedLoginIdLength: String(payload.loginId || "").length,
+  passwordMatches: !!password && String(password.value || "") === payload.password,
+  passwordLengthMatches: !!password && String(password.value || "").length === String(payload.password || "").length,
+  passwordLength: password ? String(password.value || "").length : 0,
+  expectedPasswordLength: String(payload.password || "").length,
+  headlessUserAgent: String(navigator.userAgent || "").includes("Headless"),
+  webdriver: navigator.webdriver === true,
+  hasAbckCookie: cookieNames.includes("_abck"),
+  hasBmCookie: cookieNames.includes("bm_sz"),
+};
+""",
+    )
+
+
 class EposAutoFetcher:
     def __init__(self, browser: ManagedBrowser, credentials: dict[str, str] | None = None) -> None:
         self.browser = browser
         self.credentials = credentials or {}
         self.service = service_by_id("epos")
+        self.last_login_diagnostics: dict[str, Any] = {}
 
     def open_portal(self) -> dict[str, Any]:
         self.browser.navigate(self.service.portal_url, wait_seconds=1.5)
@@ -307,6 +332,10 @@ class EposAutoFetcher:
         time.sleep(0.08)
         self.browser.type_text(payload["password"])
         time.sleep(0.3)
+        self.last_login_diagnostics = self.browser.evaluate(
+            build_epos_login_diagnostics_expression(self.credentials),
+            timeout=10,
+        ) or {}
 
         button_rect = layout["buttonRect"]
         button_y = int(layout["buttonPoint"]["y"])
@@ -325,10 +354,27 @@ class EposAutoFetcher:
         message = epos_login_error(summary)
         if not message:
             return
+        diagnostics = self._diagnostic_summary()
+        suffix = f" 診断: {diagnostics}" if diagnostics else ""
         raise AcquisitionError(
             "エポスカードのログインに失敗しました。",
             code="LOGIN_REJECTED",
-            advice=f"エポスカード側メッセージ: {message} Streamlit Secretsの [epos] login_id / password を確認してください。",
+            advice=f"エポスカード側メッセージ: {message} Streamlit Secretsの [epos] login_id / password を確認してください。{suffix}",
+        )
+
+    def _diagnostic_summary(self) -> str:
+        if not self.last_login_diagnostics:
+            return ""
+        values = self.last_login_diagnostics
+        return (
+            f"ID入力一致={values.get('loginIdMatches')}, "
+            f"ID長={values.get('loginIdLength')}/{values.get('expectedLoginIdLength')}, "
+            f"パスワード入力一致={values.get('passwordMatches')}, "
+            f"パスワード長一致={values.get('passwordLengthMatches')}, "
+            f"HeadlessUA={values.get('headlessUserAgent')}, "
+            f"webdriver={values.get('webdriver')}, "
+            f"_abck={values.get('hasAbckCookie')}, "
+            f"bm_sz={values.get('hasBmCookie')}"
         )
 
     def _advance_login(self, max_steps: int = 4) -> None:
