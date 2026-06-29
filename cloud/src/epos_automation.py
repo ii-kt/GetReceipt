@@ -5,7 +5,7 @@ from typing import Any
 
 import requests
 
-from .browser_session import BrowserAutomationError, ManagedBrowser
+from .browser_session import ManagedBrowser
 from .config import parse_month_key, service_by_id
 
 
@@ -56,7 +56,7 @@ class EposAutoFetcher:
             raise AcquisitionError(
                 "エポスカードへのログインが必要です。",
                 code="LOGIN_REQUIRED",
-                advice="取得用ブラウザでログインを完了してから、もう一度自動取得してください。",
+                advice="取得用ブラウザでログインを完了してから、もう一度取得してください。",
             )
 
         form = self._prepare_pdf_form(year, month)
@@ -181,10 +181,3 @@ class EposAutoFetcher:
             )
         return response.content
 
-
-def acquisition_error_message(error: Exception) -> str:
-    if isinstance(error, AcquisitionError):
-        return f"{error} ({error.code})"
-    if isinstance(error, BrowserAutomationError):
-        return str(error)
-    return str(error)

@@ -38,7 +38,7 @@ def acquisition_guidance(service_id: str, target_month: str) -> AcquisitionGuida
             target_hint=target_hint,
             steps=(
                 f"プルダウンで「{target_hint}」を選択",
-                "取得用ブラウザのログイン後に「PDFを自動取得してDriveへ保存」を押す",
+                "取得用ブラウザのログイン後に「PDFを取得してDriveへ保存」を押す",
                 "PDFの取得、ファイル名生成、Drive保存までGetReceiptが続けて実行",
             ),
             note="家賃は公式サイト側で対象月を選んでからPDF照会する必要があります。",

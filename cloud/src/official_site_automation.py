@@ -184,7 +184,7 @@ class CommufaAutoFetcher:
             raise AcquisitionError(
                 "コミュファへのログインが必要です。",
                 code="LOGIN_REQUIRED",
-                advice="取得用ブラウザでMyコミュファにログインしてから、もう一度自動取得してください。",
+                advice="取得用ブラウザでMyコミュファにログインしてから、もう一度取得してください。",
             )
 
         metadata_texts: list[str] = []
@@ -315,7 +315,7 @@ class TokutenAutoFetcher:
         raise AcquisitionError(
             "Outlook Webのログイン完了を検出できませんでした。",
             code="LOGIN_REQUIRED" if last_state == "login-required" else "MAILBOX_NOT_READY",
-            advice="取得用ブラウザでOutlook WebのMicrosoftログインを完了してから、もう一度自動取得してください。",
+            advice="取得用ブラウザでOutlook WebのMicrosoftログインを完了してから、もう一度取得してください。",
         )
 
     def _search_mail(self, target_month: str) -> None:
@@ -432,7 +432,7 @@ class WebBillingAutoFetcher:
         raise AcquisitionError(
             "Webビリングのログイン完了を検知できませんでした。",
             code="LOGIN_REQUIRED" if last_state == "login-required" else "LOGIN_TIMEOUT",
-            advice="取得用ブラウザでWebビリングまたはdアカウントの認証を完了してから、もう一度自動取得してください。",
+            advice="取得用ブラウザでWebビリングまたはdアカウントの認証を完了してから、もう一度取得してください。",
         )
 
 

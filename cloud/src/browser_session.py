@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 import json
 import os
-import platform
 import shutil
 import socket
 import subprocess
@@ -27,39 +26,25 @@ def _path_exists(value: str | None) -> str | None:
 
 
 def find_browser_executable() -> str | None:
-    env_candidates = (
+    for candidate in (
         os.getenv("BROWSER_EXECUTABLE"),
         os.getenv("CHROME_BIN"),
         os.getenv("CHROMIUM_BIN"),
         os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH"),
-    )
-    for candidate in env_candidates:
+    ):
         found = _path_exists(candidate)
         if found:
             return found
 
-    names = ["chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "chrome", "msedge"]
-    for name in names:
+    for name in ("chromium", "chromium-browser", "google-chrome", "google-chrome-stable"):
         found = shutil.which(name)
         if found:
             return found
 
-    if platform.system() == "Windows":
-        roots = [os.getenv("ProgramFiles"), os.getenv("ProgramFiles(x86)"), os.getenv("LOCALAPPDATA")]
-        suffixes = [
-            ("Google", "Chrome", "Application", "chrome.exe"),
-            ("Microsoft", "Edge", "Application", "msedge.exe"),
-        ]
-        for root in roots:
-            for suffix in suffixes:
-                found = _path_exists(str(Path(root or "") / Path(*suffix)))
-                if found:
-                    return found
-    else:
-        for candidate in ("/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome"):
-            found = _path_exists(candidate)
-            if found:
-                return found
+    for candidate in ("/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome"):
+        found = _path_exists(candidate)
+        if found:
+            return found
     return None
 
 
@@ -126,11 +111,9 @@ class ManagedBrowser:
         *,
         profile_dir: Path | None = None,
         download_dir: Path | None = None,
-        visible: bool = False,
     ) -> None:
         self.profile_dir = profile_dir or DATA_DIR / "browser-profile"
         self.download_dir = download_dir or DATA_DIR / "browser-downloads"
-        self.visible = visible
         self.port: int | None = None
         self.process: subprocess.Popen[Any] | None = None
         self.connection: CDPConnection | None = None
@@ -156,7 +139,6 @@ class ManagedBrowser:
             self.port = find_free_port()
 
         if self.process is None:
-            headless = (not self.visible) and (platform.system() != "Windows" or os.getenv("GETRECEIPT_HEADLESS") == "1")
             args = [
                 executable,
                 f"--remote-debugging-port={self.port}",
@@ -170,11 +152,9 @@ class ManagedBrowser:
                 "--disable-gpu",
                 "--disable-features=Crashpad",
                 "--window-size=1280,900",
+                "--headless=new",
+                "--no-sandbox",
             ]
-            if headless:
-                args.append("--headless=new")
-            if platform.system() != "Windows" or os.getenv("BROWSER_NO_SANDBOX") == "1":
-                args.append("--no-sandbox")
             args.append("about:blank")
             self.process = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 

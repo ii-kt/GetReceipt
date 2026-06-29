@@ -47,7 +47,7 @@ def upload_auto_receipt_to_drive(
     extracted = extract_receipt_data(content, metadata_text)
     if extracted.amount_yen is None:
         raise ValueError(
-            "取得した明細から金額を読み取れませんでした。PDFの内容を確認するか、手動登録で金額を入力してください。"
+            "取得した明細から金額を読み取れませんでした。PDFの内容を確認するか、ファイル追加で金額を入力してください。"
         )
 
     metadata = ReceiptMetadata(

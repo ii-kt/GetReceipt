@@ -4,7 +4,7 @@ import hashlib
 import re
 import unicodedata
 from dataclasses import asdict, dataclass
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -33,18 +33,6 @@ def normalize_extension(file_name: str | None, fallback: str = "pdf") -> str:
     extension = suffix or fallback.lower().lstrip(".")
     extension = re.sub(r"[^a-z0-9]+", "", extension)
     return extension or fallback
-
-
-def parse_transaction_date(value: Any) -> date:
-    if isinstance(value, date):
-        return value
-    text = str(value or "").strip()
-    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y%m%d"):
-        try:
-            return datetime.strptime(text, fmt).date()
-        except ValueError:
-            pass
-    raise ValueError("\u53d6\u5f15\u65e5\u306f YYYY-MM-DD \u5f62\u5f0f\u3067\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044\u3002")
 
 
 @dataclass(frozen=True)
