@@ -298,23 +298,31 @@ class EposAutoFetcher:
             time.sleep(0.35)
 
     def _set_epos_login_fields(self, payload: dict[str, str]) -> bool:
+        for field_name, value in (("loginId", payload["loginId"]), ("passWord", payload["password"])):
+            focused = self.browser.evaluate(
+                f"""(() => {{
+                  const input = document.querySelector("input[name='{field_name}']");
+                  if (!input) return false;
+                  input.focus();
+                  if (typeof input.select === "function") input.select();
+                  return document.activeElement === input;
+                }})()""",
+                timeout=10,
+            )
+            if not focused:
+                return False
+            time.sleep(0.12)
+            self.browser.clear_focused_text()
+            time.sleep(0.08)
+            self.browser.type_text(value, delay_seconds=0.055)
+            time.sleep(0.18)
+
         self.last_login_diagnostics = self.browser.evaluate(
             _script(
                 payload,
                 r"""
-const setValue = (el, value) => {
-  if (!el) return;
-  el.focus();
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-  if (setter) setter.call(el, value);
-  else el.value = value;
-  el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
-  el.dispatchEvent(new Event("change", { bubbles: true }));
-};
 const loginId = document.querySelector("input[name='loginId']");
 const password = document.querySelector("input[name='passWord']");
-setValue(loginId, payload.loginId);
-setValue(password, payload.password);
 const cookieNames = document.cookie.split(";").map((value) => value.trim().split("=")[0]).filter(Boolean);
 return {
   loginIdMatches: !!loginId && String(loginId.value || "") === payload.loginId,
