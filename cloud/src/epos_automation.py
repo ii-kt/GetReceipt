@@ -294,6 +294,33 @@ class EposAutoFetcher:
             return True
         return False
 
+    def _wait_for_login_page_ready(self, timeout_seconds: float = 8.0) -> None:
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            try:
+                state = self.browser.evaluate(
+                    r"""(() => {
+                      const cookieNames = document.cookie.split(";").map((value) => value.trim().split("=")[0]).filter(Boolean);
+                      return {
+                        readyState: document.readyState,
+                        hasLoginId: !!document.querySelector("input[name='loginId']"),
+                        hasPassword: !!document.querySelector("input[name='passWord']"),
+                        hasAbckCookie: cookieNames.includes("_abck"),
+                        hasBmCookie: cookieNames.includes("bm_sz"),
+                      };
+                    })()""",
+                    timeout=5,
+                ) or {}
+            except Exception:
+                state = {}
+            fields_ready = state.get("hasLoginId") and state.get("hasPassword")
+            cookies_ready = state.get("hasAbckCookie") and state.get("hasBmCookie")
+            if state.get("readyState") == "complete" and fields_ready and cookies_ready:
+                return
+            if fields_ready and time.time() > deadline - 3:
+                return
+            time.sleep(0.35)
+
     def _perform_human_login_attempt(self) -> bool:
         payload = _login_payload(self.credentials)
         if not payload["loginId"]:
@@ -308,6 +335,7 @@ class EposAutoFetcher:
                 code="PASSWORD_NOT_CONFIGURED",
                 advice="Streamlit CloudのSecretsにエポスNetパスワードを設定してください。",
             )
+        self._wait_for_login_page_ready()
         layout = self.browser.evaluate(build_epos_login_layout_expression(), timeout=10) or {}
         if not layout.get("ok"):
             result = self.browser.evaluate(build_epos_auto_login_expression(self.credentials), timeout=10) or {}
@@ -339,15 +367,21 @@ class EposAutoFetcher:
 
         button_rect = layout["buttonRect"]
         button_y = int(layout["buttonPoint"]["y"])
-        sweep_start_x = int(button_rect["left"]) + 24
-        sweep_end_x = int(button_rect["right"]) - 24
-        self.browser.move_at(sweep_start_x, button_y - 8)
-        time.sleep(0.1)
-        self.browser.drag_at(sweep_start_x, button_y, sweep_end_x, button_y, steps=28)
-        time.sleep(0.25)
+        left_x = int(button_rect["left"]) + 24
+        right_x = int(button_rect["right"]) - 24
+        center_x = int(layout["buttonPoint"]["x"])
+        for x, y_offset in (
+            (left_x, -10),
+            (int(button_rect["left"]) + 90, 7),
+            (center_x, -4),
+            (right_x, 5),
+            (center_x, 0),
+        ):
+            self.browser.move_at(x, button_y + y_offset)
+            time.sleep(0.08)
         button = layout["buttonPoint"]
         self.browser.click_at(int(button["x"]), int(button["y"]))
-        time.sleep(1.6)
+        time.sleep(3.0)
         return True
 
     def _raise_login_error_if_present(self, summary: dict[str, Any]) -> None:
@@ -385,6 +419,7 @@ class EposAutoFetcher:
                 return
             if not self._perform_human_login_attempt():
                 break
+            time.sleep(2.0)
         summary = self.browser.page_summary()
         self._raise_login_error_if_present(summary)
         if classify_login_state(summary) != "logged-in":
@@ -411,12 +446,18 @@ class EposAutoFetcher:
             except AcquisitionError:
                 raise
             if progressed:
+                time.sleep(2.0)
                 continue
             time.sleep(1.0)
+        diagnostics = self._diagnostic_summary()
         raise AcquisitionError(
             "エポスカードの自動ログインを完了できませんでした。",
             code="LOGIN_REQUIRED" if last_state == "login-required" else "LOGIN_TIMEOUT",
-            advice=last_reason or "Streamlit Cloud Secretsのログイン情報とエポスカードのログイン画面を確認してください。",
+            advice=last_reason
+            or (
+                "Streamlit Cloud Secretsのログイン情報とエポスカードのログイン画面を確認してください。"
+                + (f" 診断: {diagnostics}" if diagnostics else "")
+            ),
         )
 
     def _prepare_pdf_form(self, year: int, month: int) -> dict[str, Any]:
