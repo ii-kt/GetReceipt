@@ -209,6 +209,7 @@ class EposAutoFetcher:
         self.credentials = credentials or {}
         self.service = service_by_id("epos")
         self.last_login_diagnostics: dict[str, Any] = {}
+        self.login_submit_attempts = 0
 
     def open_portal(self) -> dict[str, Any]:
         self.browser.navigate(self.service.portal_url, wait_seconds=1.5)
@@ -346,6 +347,38 @@ return {
             and self.last_login_diagnostics.get("passwordMatches")
         )
 
+    def _submit_epos_login_button(self, layout: dict[str, Any]) -> None:
+        button_rect = layout["buttonRect"]
+        button_y = int(layout["buttonPoint"]["y"])
+        left_x = int(button_rect["left"]) + 24
+        right_x = int(button_rect["right"]) - 24
+        center_x = int(layout["buttonPoint"]["x"])
+        pattern = self.login_submit_attempts % 4
+        self.login_submit_attempts += 1
+
+        for x, y_offset in (
+            (left_x, -10),
+            (int(button_rect["left"]) + 90, 7),
+            (center_x, -4),
+            (right_x, 5),
+            (center_x, 0),
+        ):
+            self.browser.move_at(x, button_y + y_offset)
+            time.sleep(0.08)
+
+        if pattern == 1:
+            self.browser.click_at(right_x, button_y)
+        elif pattern == 2:
+            self.browser.drag_at(left_x, button_y, right_x, button_y, steps=34)
+            time.sleep(0.35)
+            self.browser.click_at(center_x, button_y)
+        elif pattern == 3:
+            self.browser.drag_at(right_x, button_y, left_x, button_y, steps=34)
+            time.sleep(0.35)
+            self.browser.click_at(center_x, button_y)
+        else:
+            self.browser.click_at(center_x, button_y)
+
     def _perform_human_login_attempt(self) -> bool:
         payload = _login_payload(self.credentials)
         if not payload["loginId"]:
@@ -373,23 +406,7 @@ return {
                 advice=f"診断: {self._diagnostic_summary()}",
             )
         time.sleep(0.3)
-
-        button_rect = layout["buttonRect"]
-        button_y = int(layout["buttonPoint"]["y"])
-        left_x = int(button_rect["left"]) + 24
-        right_x = int(button_rect["right"]) - 24
-        center_x = int(layout["buttonPoint"]["x"])
-        for x, y_offset in (
-            (left_x, -10),
-            (int(button_rect["left"]) + 90, 7),
-            (center_x, -4),
-            (right_x, 5),
-            (center_x, 0),
-        ):
-            self.browser.move_at(x, button_y + y_offset)
-            time.sleep(0.08)
-        button = layout["buttonPoint"]
-        self.browser.click_at(int(button["x"]), int(button["y"]))
+        self._submit_epos_login_button(layout)
         time.sleep(3.0)
         return True
 
@@ -442,9 +459,16 @@ return {
         deadline = time.time() + timeout_seconds
         last_state = "unknown"
         last_reason = ""
+        login_rejections = 0
         while time.time() < deadline:
             summary = self.browser.page_summary()
-            self._raise_login_error_if_present(summary)
+            try:
+                self._raise_login_error_if_present(summary)
+            except AcquisitionError as error:
+                if error.code != "LOGIN_REJECTED" or login_rejections >= 3:
+                    raise
+                login_rejections += 1
+                last_reason = error.advice
             state = classify_login_state(summary)
             last_state = state
             if state == "logged-in":
