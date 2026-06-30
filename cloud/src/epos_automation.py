@@ -203,30 +203,6 @@ return {
 })()"""
 
 
-def build_epos_login_diagnostics_expression(credentials: dict[str, str]) -> str:
-    return _script(
-        _login_payload(credentials),
-        r"""
-const loginId = document.querySelector("input[name='loginId']");
-const password = document.querySelector("input[name='passWord']");
-const cookieNames = document.cookie.split(";").map((value) => value.trim().split("=")[0]).filter(Boolean);
-return {
-  loginIdMatches: !!loginId && String(loginId.value || "") === payload.loginId,
-  loginIdLength: loginId ? String(loginId.value || "").length : 0,
-  expectedLoginIdLength: String(payload.loginId || "").length,
-  passwordMatches: !!password && String(password.value || "") === payload.password,
-  passwordLengthMatches: !!password && String(password.value || "").length === String(payload.password || "").length,
-  passwordLength: password ? String(password.value || "").length : 0,
-  expectedPasswordLength: String(payload.password || "").length,
-  headlessUserAgent: String(navigator.userAgent || "").includes("Headless"),
-  webdriver: navigator.webdriver === true,
-  hasAbckCookie: cookieNames.includes("_abck"),
-  hasBmCookie: cookieNames.includes("bm_sz"),
-};
-""",
-    )
-
-
 class EposAutoFetcher:
     def __init__(self, browser: ManagedBrowser, credentials: dict[str, str] | None = None) -> None:
         self.browser = browser
@@ -321,6 +297,47 @@ class EposAutoFetcher:
                 return
             time.sleep(0.35)
 
+    def _set_epos_login_fields(self, payload: dict[str, str]) -> bool:
+        self.last_login_diagnostics = self.browser.evaluate(
+            _script(
+                payload,
+                r"""
+const setValue = (el, value) => {
+  if (!el) return;
+  el.focus();
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+  if (setter) setter.call(el, value);
+  else el.value = value;
+  el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+  el.dispatchEvent(new Event("change", { bubbles: true }));
+};
+const loginId = document.querySelector("input[name='loginId']");
+const password = document.querySelector("input[name='passWord']");
+setValue(loginId, payload.loginId);
+setValue(password, payload.password);
+const cookieNames = document.cookie.split(";").map((value) => value.trim().split("=")[0]).filter(Boolean);
+return {
+  loginIdMatches: !!loginId && String(loginId.value || "") === payload.loginId,
+  loginIdLength: loginId ? String(loginId.value || "").length : 0,
+  expectedLoginIdLength: String(payload.loginId || "").length,
+  passwordMatches: !!password && String(password.value || "") === payload.password,
+  passwordLengthMatches: !!password && String(password.value || "").length === String(payload.password || "").length,
+  passwordLength: password ? String(password.value || "").length : 0,
+  expectedPasswordLength: String(payload.password || "").length,
+  headlessUserAgent: String(navigator.userAgent || "").includes("Headless"),
+  webdriver: navigator.webdriver === true,
+  hasAbckCookie: cookieNames.includes("_abck"),
+  hasBmCookie: cookieNames.includes("bm_sz"),
+};
+""",
+            ),
+            timeout=10,
+        ) or {}
+        return bool(
+            self.last_login_diagnostics.get("loginIdMatches")
+            and self.last_login_diagnostics.get("passwordMatches")
+        )
+
     def _perform_human_login_attempt(self) -> bool:
         payload = _login_payload(self.credentials)
         if not payload["loginId"]:
@@ -341,29 +358,13 @@ class EposAutoFetcher:
             result = self.browser.evaluate(build_epos_auto_login_expression(self.credentials), timeout=10) or {}
             return self._apply_login_result(result)
 
-        login_point = layout["loginIdPoint"]
-        self.browser.move_at(int(login_point["x"]) - 20, int(login_point["y"]) - 6)
-        time.sleep(0.08)
-        self.browser.click_at(int(login_point["x"]), int(login_point["y"]))
-        time.sleep(0.15)
-        self.browser.clear_focused_text()
-        time.sleep(0.08)
-        self.browser.type_text(payload["loginId"])
-        time.sleep(0.2)
-
-        password_point = layout["passwordPoint"]
-        self.browser.move_at(int(password_point["x"]) - 18, int(password_point["y"]) - 5)
-        time.sleep(0.08)
-        self.browser.click_at(int(password_point["x"]), int(password_point["y"]))
-        time.sleep(0.15)
-        self.browser.clear_focused_text()
-        time.sleep(0.08)
-        self.browser.type_text(payload["password"])
+        if not self._set_epos_login_fields(payload):
+            raise AcquisitionError(
+                "エポスカードのログイン入力欄に認証情報を自動入力できませんでした。",
+                code="LOGIN_INPUT_FAILED",
+                advice=f"診断: {self._diagnostic_summary()}",
+            )
         time.sleep(0.3)
-        self.last_login_diagnostics = self.browser.evaluate(
-            build_epos_login_diagnostics_expression(self.credentials),
-            timeout=10,
-        ) or {}
 
         button_rect = layout["buttonRect"]
         button_y = int(layout["buttonPoint"]["y"])
