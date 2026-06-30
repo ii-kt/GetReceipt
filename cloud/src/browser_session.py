@@ -19,7 +19,7 @@ class BrowserAutomationError(RuntimeError):
 
 
 DEFAULT_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "Mozilla/5.0 (X11; Linux x86_64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/149.0.0.0 Safari/537.36"
 )
@@ -128,6 +128,7 @@ class ManagedBrowser:
         self.target_id: str | None = None
         self.session_id: str | None = None
         self.stderr_path = self.download_dir / "chromium-stderr.log"
+        self.uses_headless = True
 
     def ensure_started(self) -> None:
         if self.process is not None and self.process.poll() is not None:
@@ -168,20 +169,31 @@ class ManagedBrowser:
 
     def _start_browser_with_fallbacks(self, executable: str) -> None:
         errors: list[str] = []
-        for headless_arg in ("--headless=new", "--headless"):
+        attempts: list[tuple[str, str | None, list[str]]] = []
+        xvfb_run = shutil.which("xvfb-run") if os.name == "posix" else None
+        if xvfb_run:
+            attempts.append(("xvfb", None, [xvfb_run, "-a", "-s", "-screen 0 1280x900x24"]))
+        attempts.extend(
+            [
+                ("headless-new", "--headless=new", []),
+                ("headless", "--headless", []),
+            ]
+        )
+        for label, headless_arg, prefix_args in attempts:
             self._cleanup_profile_locks()
-            self._launch_browser(executable, headless_arg)
+            self._launch_browser(executable, headless_arg, prefix_args)
             try:
                 self._wait_for_version()
                 return
             except BrowserAutomationError as error:
-                errors.append(str(error))
+                errors.append(f"{label}: {error}")
                 self._stop_process()
                 self.port = find_free_port()
         raise BrowserAutomationError("取得用ブラウザを起動できませんでした: " + " / ".join(errors[-2:]))
 
-    def _launch_browser(self, executable: str, headless_arg: str) -> None:
+    def _launch_browser(self, executable: str, headless_arg: str | None, prefix_args: list[str] | None = None) -> None:
         assert self.port is not None
+        self.uses_headless = headless_arg is not None
         self.stderr_path.parent.mkdir(parents=True, exist_ok=True)
         self.stderr_path.write_text("", encoding="utf-8")
         args = [
@@ -207,14 +219,16 @@ class ManagedBrowser:
             "--no-zygote",
             "--lang=ja-JP,ja",
             f"--accept-lang={ACCEPT_LANGUAGE}",
-            f"--user-agent={DEFAULT_USER_AGENT}",
             "--window-size=1280,900",
-            headless_arg,
             "about:blank",
         ]
+        if headless_arg:
+            args.insert(-1, f"--user-agent={DEFAULT_USER_AGENT}")
+            args.insert(-1, headless_arg)
+        command = [*(prefix_args or []), *args]
         stderr_handle = self.stderr_path.open("ab")
         try:
-            self.process = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=stderr_handle)
+            self.process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=stderr_handle)
         finally:
             stderr_handle.close()
 
@@ -353,35 +367,36 @@ class ManagedBrowser:
     def _apply_environment_overrides(self) -> None:
         assert self.connection is not None
         assert self.session_id is not None
-        try:
-            self.connection.send(
-                "Network.setUserAgentOverride",
-                {
-                    "userAgent": DEFAULT_USER_AGENT,
-                    "acceptLanguage": ACCEPT_LANGUAGE,
-                    "platform": "Windows",
-                    "userAgentMetadata": {
-                        "brands": [
-                            {"brand": "Google Chrome", "version": "149"},
-                            {"brand": "Chromium", "version": "149"},
-                            {"brand": "Not A(Brand", "version": "24"},
-                        ],
-                        "fullVersionList": [
-                            {"brand": "Google Chrome", "version": "149.0.0.0"},
-                            {"brand": "Chromium", "version": "149.0.0.0"},
-                            {"brand": "Not A(Brand", "version": "24.0.0.0"},
-                        ],
-                        "platform": "Windows",
-                        "platformVersion": "19.0.0",
-                        "architecture": "x86",
-                        "model": "",
-                        "mobile": False,
+        if self.uses_headless:
+            try:
+                self.connection.send(
+                    "Network.setUserAgentOverride",
+                    {
+                        "userAgent": DEFAULT_USER_AGENT,
+                        "acceptLanguage": ACCEPT_LANGUAGE,
+                        "platform": "Linux",
+                        "userAgentMetadata": {
+                            "brands": [
+                                {"brand": "Google Chrome", "version": "149"},
+                                {"brand": "Chromium", "version": "149"},
+                                {"brand": "Not A(Brand", "version": "24"},
+                            ],
+                            "fullVersionList": [
+                                {"brand": "Google Chrome", "version": "149.0.0.0"},
+                                {"brand": "Chromium", "version": "149.0.0.0"},
+                                {"brand": "Not A(Brand", "version": "24.0.0.0"},
+                            ],
+                            "platform": "Linux",
+                            "platformVersion": "",
+                            "architecture": "x86",
+                            "model": "",
+                            "mobile": False,
+                        },
                     },
-                },
-                session_id=self.session_id,
-            )
-        except BrowserAutomationError:
-            pass
+                    session_id=self.session_id,
+                )
+            except BrowserAutomationError:
+                pass
         for method, params in (
             ("Emulation.setLocaleOverride", {"locale": "ja-JP"}),
             ("Emulation.setTimezoneOverride", {"timezoneId": "Asia/Tokyo"}),
@@ -394,18 +409,19 @@ class ManagedBrowser:
     def _install_stealth_script(self) -> None:
         assert self.connection is not None
         assert self.session_id is not None
+        platform = "Linux x86_64"
         source = """
 (() => {
   try {
     Object.defineProperty(navigator, "webdriver", { get: () => undefined });
     Object.defineProperty(navigator, "languages", { get: () => ["ja-JP", "ja", "en-US", "en"] });
     Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] });
-    Object.defineProperty(navigator, "platform", { get: () => "Win32" });
+    Object.defineProperty(navigator, "platform", { get: () => "__PLATFORM__" });
     Object.defineProperty(navigator, "vendor", { get: () => "Google Inc." });
     window.chrome = window.chrome || { runtime: {} };
   } catch (_) {}
 })();
-"""
+""".replace("__PLATFORM__", platform)
         try:
             self.connection.send(
                 "Page.addScriptToEvaluateOnNewDocument",

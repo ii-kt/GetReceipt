@@ -1,2 +1,4 @@
 chromium
 fonts-noto-cjk
+xvfb
+xauth
