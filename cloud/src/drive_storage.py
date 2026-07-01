@@ -148,6 +148,27 @@ class DriveStorage:
             if not page_token:
                 return files
 
+    def download_bytes_by_name(self, file_name: str) -> bytes | None:
+        existing = self._find_first_by_name(file_name)
+        if not existing:
+            return None
+
+        try:
+            from googleapiclient.http import MediaIoBaseDownload
+        except ModuleNotFoundError as error:
+            raise DriveConfigError(
+                "Google Drive\u9023\u643a\u30e9\u30a4\u30d6\u30e9\u30ea\u304c\u4e0d\u8db3\u3057\u3066\u3044\u307e\u3059\u3002"
+                "requirements.txt\u3092\u30a4\u30f3\u30b9\u30c8\u30fc\u30eb\u3057\u3066\u304f\u3060\u3055\u3044\u3002"
+            ) from error
+
+        request = self.service.files().get_media(fileId=existing["id"], supportsAllDrives=True)
+        buffer = BytesIO()
+        downloader = MediaIoBaseDownload(buffer, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        return buffer.getvalue()
+
     def rename_file(self, *, file_id: str, new_name: str) -> DriveUploadResult:
         updated = self.service.files().update(
             fileId=file_id,

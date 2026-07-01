@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 from datetime import datetime, timezone
+from io import StringIO
 from pathlib import Path
 from typing import Iterable
 
@@ -87,6 +88,9 @@ class ReceiptLedger:
             self._write(rows)
         return changed
 
+    def replace_all(self, rows: Iterable[dict[str, str]]) -> None:
+        self._write(rows)
+
     def to_csv_bytes(self) -> bytes:
         rows = self.read()
         return rows_to_csv_bytes(rows)
@@ -100,12 +104,15 @@ class ReceiptLedger:
 
 
 def rows_to_csv_bytes(rows: Iterable[dict[str, str]]) -> bytes:
-    from io import StringIO
-
     buffer = StringIO()
     writer = csv.DictWriter(buffer, fieldnames=CSV_FIELDS, extrasaction="ignore")
     writer.writeheader()
     writer.writerows(rows)
     return buffer.getvalue().encode("utf-8-sig")
+
+
+def rows_from_csv_bytes(content: bytes) -> list[dict[str, str]]:
+    text = content.decode("utf-8-sig")
+    return list(csv.DictReader(StringIO(text)))
 
 

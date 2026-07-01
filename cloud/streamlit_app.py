@@ -6,7 +6,6 @@ import re
 import subprocess
 from datetime import date, datetime
 from io import StringIO
-from pathlib import Path
 
 
 def cleanup_orphan_acquisition_browsers() -> None:
@@ -37,11 +36,10 @@ from src.config import (
     selectable_months,
     service_by_id,
 )
-from src.ledger import ReceiptLedger
+from src.ledger import ReceiptLedger, rows_from_csv_bytes, rows_to_csv_bytes
 from src.naming import (
     ReceiptMetadata,
     build_receipt_filename,
-    inspect_receipt_filename,
     normalize_amount_yen,
     normalize_extension,
     sha256_bytes,
@@ -657,6 +655,7 @@ def render_history() -> None:
 def render_drive_filename_audit() -> None:
     render_section_heading("Drive folder", "ファイル名チェック", "保存先フォルダ内の全ファイルを確認")
     st.code("YYYYMMDD_取引先_金額円.拡張子\n例: 20260701_株式会社NTTドコモ_8250円.pdf", language="text")
+    st.caption("YYYYMMDDは取引日 / 発行日です。保存台帳のメタデータから取得本体と同じ生成関数で照合します。")
     if not secrets_configured():
         st.warning("Google Drive用のSecretsが未設定です。")
         return
@@ -709,12 +708,39 @@ def render_drive_filename_audit() -> None:
 
 
 def refresh_drive_filename_audit(storage) -> list[dict[str, str]]:
-    rows = build_drive_filename_audit_rows(storage.list_files())
+    rows = build_drive_filename_audit_rows(storage.list_files(), load_synced_ledger_rows(storage))
     st.session_state["drive_filename_audit_rows"] = rows
     return rows
 
 
-def build_drive_filename_audit_rows(files: list[dict[str, str]]) -> list[dict[str, str]]:
+def load_synced_ledger_rows(storage) -> list[dict[str, str]]:
+    rows_by_drive_id: dict[str, dict[str, str]] = {}
+    rows_without_drive_id: list[dict[str, str]] = []
+
+    def collect(rows: list[dict[str, str]]) -> None:
+        for row in rows:
+            drive_file_id = row.get("drive_file_id", "")
+            if drive_file_id:
+                rows_by_drive_id[drive_file_id] = row
+            else:
+                rows_without_drive_id.append(row)
+
+    collect(ledger().read())
+    drive_content = storage.download_bytes_by_name("_receipt_index.csv")
+    if drive_content:
+        collect(rows_from_csv_bytes(drive_content))
+    return [*rows_by_drive_id.values(), *rows_without_drive_id]
+
+
+def build_drive_filename_audit_rows(
+    files: list[dict[str, str]],
+    ledger_rows: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    ledger_by_drive_id = {
+        row.get("drive_file_id", ""): row
+        for row in ledger_rows
+        if row.get("drive_file_id")
+    }
     rows: list[dict[str, str]] = []
     for file in files:
         name = file.get("name", "")
@@ -723,18 +749,44 @@ def build_drive_filename_audit_rows(files: list[dict[str, str]]) -> list[dict[st
             status = "管理"
             reason = "フォルダです。"
             transaction_date = partner_name = amount_yen = extension = ""
+            expected_name = ""
+        elif name == "_receipt_index.csv":
+            status = "管理"
+            reason = "保存台帳の同期ファイルです。"
+            transaction_date = partner_name = amount_yen = extension = ""
+            expected_name = ""
         else:
-            inspection = inspect_receipt_filename(name)
-            status = inspection.status
-            reason = inspection.reason
-            transaction_date = inspection.transaction_date
-            partner_name = inspection.partner_name
-            amount_yen = inspection.amount_yen
-            extension = inspection.extension
+            extension = normalize_extension(name, "pdf")
+            record = ledger_by_drive_id.get(file.get("id", ""))
+            if record:
+                try:
+                    expected_name = expected_filename_from_ledger_record(record, extension)
+                    status = "OK" if name == expected_name else "要確認"
+                    reason = (
+                        "保存台帳のメタデータから生成したファイル名と一致しています。"
+                        if status == "OK"
+                        else "保存台帳のメタデータから生成したファイル名と一致していません。"
+                    )
+                    transaction_date = transaction_date_key_from_record(record)
+                    partner_name = record.get("partner_name", "")
+                    amount_yen = record.get("amount_yen", "")
+                except Exception as error:
+                    status = "要確認"
+                    reason = f"保存台帳のメタデータから期待ファイル名を生成できません: {error}"
+                    transaction_date = record.get("transaction_date", "")
+                    partner_name = record.get("partner_name", "")
+                    amount_yen = record.get("amount_yen", "")
+                    expected_name = ""
+            else:
+                status = "要確認"
+                reason = "保存台帳にDrive IDがないため、取得本体と同じ生成仕様で照合できません。"
+                transaction_date = partner_name = amount_yen = ""
+                expected_name = ""
         rows.append({
             "ファイルID": file.get("id", ""),
             "判定": status,
             "ファイル名": name,
+            "期待ファイル名": expected_name,
             "理由": reason,
             "取引日": transaction_date,
             "取引先": partner_name,
@@ -746,6 +798,32 @@ def build_drive_filename_audit_rows(files: list[dict[str, str]]) -> list[dict[st
 
     order = {"要確認": 0, "OK": 1, "管理": 2}
     return sorted(rows, key=lambda row: (order.get(row["判定"], 9), row["ファイル名"]))
+
+
+def expected_filename_from_ledger_record(record: dict[str, str], extension: str) -> str:
+    metadata = ReceiptMetadata(
+        service_id=record.get("service_id", ""),
+        service_label=record.get("service_label", ""),
+        target_month=record.get("target_month", ""),
+        transaction_date=parse_ledger_transaction_date(record.get("transaction_date", "")),
+        partner_name=record.get("partner_name", ""),
+        amount_yen=normalize_amount_yen(record.get("amount_yen", "")),
+        currency=record.get("currency", "JPY") or "JPY",
+        source_url=record.get("source_url", ""),
+        original_file_name=record.get("original_file_name", ""),
+    )
+    return build_receipt_filename(metadata, extension)
+
+
+def transaction_date_key_from_record(record: dict[str, str]) -> str:
+    return parse_ledger_transaction_date(record.get("transaction_date", "")).strftime("%Y%m%d")
+
+
+def parse_ledger_transaction_date(value: str) -> date:
+    text = str(value or "").strip()
+    if re.fullmatch(r"\d{8}", text):
+        return datetime.strptime(text, "%Y%m%d").date()
+    return date.fromisoformat(text)
 
 
 def audit_display_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -830,12 +908,7 @@ def rename_drive_file(*, file_id: str, new_name: str) -> None:
 
         storage = drive_storage_from_secrets(st.secrets)
         storage.rename_file(file_id=file_id, new_name=new_name)
-        if ledger().rename_file(drive_file_id=file_id, file_name=new_name):
-            storage.upsert_bytes(
-                file_name="_receipt_index.csv",
-                content=ledger().to_csv_bytes(),
-                mime_type="text/csv",
-            )
+        rename_synced_ledger_file(storage, drive_file_id=file_id, file_name=new_name)
         refresh_drive_filename_audit(storage)
     except Exception as error:
         st.error(f"ファイル名の変更に失敗しました: {error}")
@@ -844,9 +917,26 @@ def rename_drive_file(*, file_id: str, new_name: str) -> None:
     st.rerun()
 
 
+def rename_synced_ledger_file(storage, *, drive_file_id: str, file_name: str) -> bool:
+    rows = load_synced_ledger_rows(storage)
+    changed = False
+    for row in rows:
+        if row.get("drive_file_id") == drive_file_id:
+            row["file_name"] = file_name
+            changed = True
+    if changed:
+        ledger().replace_all(rows)
+        storage.upsert_bytes(
+            file_name="_receipt_index.csv",
+            content=rows_to_csv_bytes(rows),
+            mime_type="text/csv",
+        )
+    return changed
+
+
 def default_rename_date(row: dict[str, str]) -> date:
     value = row.get("取引日", "")
-    parsed_date = parse_rename_date(value) or parse_rename_date(infer_rename_parts(row).get("date", ""))
+    parsed_date = parse_rename_date(value)
     if parsed_date:
         return parsed_date
     return date.today()
@@ -855,21 +945,14 @@ def default_rename_date(row: dict[str, str]) -> date:
 def default_rename_partner(row: dict[str, str]) -> str:
     if row.get("取引先"):
         return row["取引先"]
-    inferred = infer_rename_parts(row)
-    if inferred.get("partner"):
-        return inferred["partner"]
-    stem = Path(row.get("ファイル名", "")).stem
-    stem = re.sub(r"^\d{8}[_-]?", "", stem)
-    stem = re.sub(r"[_-]?\d+円?$", "", stem)
-    return stem.strip("._- ") or "取引先未設定"
+    return ""
 
 
 def default_rename_amount(row: dict[str, str]) -> int:
     value = row.get("金額", "")
     if value.isdigit():
         return int(value)
-    inferred_amount = infer_rename_parts(row).get("amount", "")
-    return int(inferred_amount) if inferred_amount.isdigit() else 0
+    return 0
 
 
 def default_rename_extension(row: dict[str, str]) -> str:
@@ -883,31 +966,6 @@ def parse_rename_date(value: str) -> date | None:
         return datetime.strptime(value, "%Y%m%d").date()
     except ValueError:
         return None
-
-
-def infer_rename_parts(row: dict[str, str]) -> dict[str, str]:
-    stem = Path(row.get("ファイル名", "")).stem
-    result = {"date": "", "partner": "", "amount": ""}
-
-    date_match = re.match(r"^(?P<date>\d{8})[_-](?P<rest>.+)$", stem)
-    if date_match and parse_rename_date(date_match.group("date")):
-        result["date"] = date_match.group("date")
-        rest = date_match.group("rest")
-        amount_first = re.match(r"^(?P<amount>\d+)[_-](?P<partner>.+)$", rest)
-        if amount_first:
-            result["amount"] = amount_first.group("amount")
-            result["partner"] = amount_first.group("partner").strip("._- ")
-            return result
-        amount_last = re.match(r"^(?P<partner>.+)[_-](?P<amount>\d+)円?$", rest)
-        if amount_last:
-            result["partner"] = amount_last.group("partner").strip("._- ")
-            result["amount"] = amount_last.group("amount")
-            return result
-
-    embedded_date = re.search(r"(20\d{6})", stem)
-    if embedded_date and parse_rename_date(embedded_date.group(1)):
-        result["date"] = embedded_date.group(1)
-    return result
 
 
 def build_rename_preview_name(
