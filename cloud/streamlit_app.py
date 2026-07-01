@@ -1049,7 +1049,7 @@ def rename_synced_ledger_file(
 
 def default_rename_date(row: dict[str, str]) -> date:
     value = row.get("取引日", "")
-    parsed_date = parse_rename_date(value)
+    parsed_date = parse_rename_date(value) or parse_rename_file_name(row).get("transaction_date")
     if parsed_date:
         return parsed_date
     return date.today()
@@ -1058,14 +1058,14 @@ def default_rename_date(row: dict[str, str]) -> date:
 def default_rename_partner(row: dict[str, str]) -> str:
     if row.get("取引先"):
         return row["取引先"]
-    return ""
+    return parse_rename_file_name(row).get("partner_name", "")
 
 
 def default_rename_amount(row: dict[str, str]) -> int:
     value = row.get("金額", "")
     if value.isdigit():
         return int(value)
-    return 0
+    return parse_rename_file_name(row).get("amount_yen", 0)
 
 
 def default_rename_extension(row: dict[str, str]) -> str:
@@ -1079,6 +1079,23 @@ def parse_rename_date(value: str) -> date | None:
         return datetime.strptime(value, "%Y%m%d").date()
     except ValueError:
         return None
+
+
+def parse_rename_file_name(row: dict[str, str]) -> dict[str, object]:
+    match = re.fullmatch(
+        r"(?P<date>\d{8})_(?P<partner>.+)_(?P<amount>\d+)円\.[a-z0-9]+",
+        row.get("ファイル名", ""),
+    )
+    if not match:
+        return {}
+    transaction_date = parse_rename_date(match.group("date"))
+    if not transaction_date:
+        return {}
+    return {
+        "transaction_date": transaction_date,
+        "partner_name": match.group("partner"),
+        "amount_yen": int(match.group("amount")),
+    }
 
 
 def build_rename_metadata(
