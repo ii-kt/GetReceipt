@@ -718,9 +718,43 @@ def render_drive_filename_audit() -> None:
 
 
 def refresh_drive_filename_audit(storage) -> list[dict[str, str]]:
-    rows = build_drive_filename_audit_rows(storage.list_files(), load_synced_ledger_rows(storage))
+    files = storage.list_files()
+    ledger_rows = repair_missing_ledger_drive_ids(storage, files, load_synced_ledger_rows(storage))
+    rows = build_drive_filename_audit_rows(files, ledger_rows)
     st.session_state["drive_filename_audit_rows"] = rows
     return rows
+
+
+def repair_missing_ledger_drive_ids(
+    storage,
+    files: list[dict[str, str]],
+    ledger_rows: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    rows_by_file_name = {
+        row.get("file_name", ""): row
+        for row in ledger_rows
+        if row.get("file_name") and not row.get("drive_file_id")
+    }
+    changed = False
+    for file in files:
+        name = file.get("name", "")
+        if not name or name == "_receipt_index.csv" or file.get("mimeType") == "application/vnd.google-apps.folder":
+            continue
+        row = rows_by_file_name.get(name)
+        if not row:
+            continue
+        row["drive_file_id"] = file.get("id", "")
+        row["drive_web_view_link"] = file.get("webViewLink", row.get("drive_web_view_link", ""))
+        changed = True
+
+    if changed:
+        ledger().replace_all(ledger_rows)
+        storage.upsert_bytes(
+            file_name="_receipt_index.csv",
+            content=rows_to_csv_bytes(ledger_rows),
+            mime_type="text/csv",
+        )
+    return ledger_rows
 
 
 def load_synced_ledger_rows(storage) -> list[dict[str, str]]:
