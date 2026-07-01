@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import csv
 import os
+import re
 import subprocess
+from datetime import date, datetime
 from io import StringIO
+from pathlib import Path
 
 
 def cleanup_orphan_acquisition_browsers() -> None:
@@ -658,16 +661,19 @@ def render_drive_filename_audit() -> None:
         st.warning("Google Drive用のSecretsが未設定です。")
         return
 
+    notice = st.session_state.pop("drive_filename_audit_notice", "")
+    if notice:
+        st.success(notice)
+
     if st.button("フォルダ内のファイル名を確認", type="primary", use_container_width=True):
         try:
             from src.receipt_pipeline import drive_storage_from_secrets
 
             storage = drive_storage_from_secrets(st.secrets)
-            rows = build_drive_filename_audit_rows(storage.list_files())
+            rows = refresh_drive_filename_audit(storage)
         except Exception as error:
             st.error(f"Driveフォルダの確認に失敗しました: {error}")
             return
-        st.session_state["drive_filename_audit_rows"] = rows
 
     rows = st.session_state.get("drive_filename_audit_rows", [])
     if not rows:
@@ -683,21 +689,29 @@ def render_drive_filename_audit() -> None:
     cols[2].metric("要確認", review_count)
     cols[3].metric("管理", managed_count)
 
+    display_rows = audit_display_rows(rows)
     st.dataframe(
-        rows,
+        display_rows,
         use_container_width=True,
         hide_index=True,
         column_config={
             "Drive": st.column_config.LinkColumn("Drive"),
         },
     )
+    render_drive_rename_tools(rows)
     st.download_button(
         "確認結果CSVをダウンロード",
-        data=audit_rows_to_csv_bytes(rows),
+        data=audit_rows_to_csv_bytes(display_rows),
         file_name="drive_filename_audit.csv",
         mime="text/csv",
         use_container_width=True,
     )
+
+
+def refresh_drive_filename_audit(storage) -> list[dict[str, str]]:
+    rows = build_drive_filename_audit_rows(storage.list_files())
+    st.session_state["drive_filename_audit_rows"] = rows
+    return rows
 
 
 def build_drive_filename_audit_rows(files: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -718,6 +732,7 @@ def build_drive_filename_audit_rows(files: list[dict[str, str]]) -> list[dict[st
             amount_yen = inspection.amount_yen
             extension = inspection.extension
         rows.append({
+            "ファイルID": file.get("id", ""),
             "判定": status,
             "ファイル名": name,
             "理由": reason,
@@ -733,6 +748,10 @@ def build_drive_filename_audit_rows(files: list[dict[str, str]]) -> list[dict[st
     return sorted(rows, key=lambda row: (order.get(row["判定"], 9), row["ファイル名"]))
 
 
+def audit_display_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    return [{key: value for key, value in row.items() if key != "ファイルID"} for row in rows]
+
+
 def audit_rows_to_csv_bytes(rows: list[dict[str, str]]) -> bytes:
     buffer = StringIO()
     fieldnames = list(rows[0].keys()) if rows else []
@@ -740,6 +759,135 @@ def audit_rows_to_csv_bytes(rows: list[dict[str, str]]) -> bytes:
     writer.writeheader()
     writer.writerows(rows)
     return buffer.getvalue().encode("utf-8-sig")
+
+
+def render_drive_rename_tools(rows: list[dict[str, str]]) -> None:
+    targets = [row for row in rows if row.get("判定") == "要確認" and row.get("ファイルID")]
+    if not targets:
+        return
+
+    st.divider()
+    st.markdown("**ファイル名を変更**")
+    existing_names = {row.get("ファイル名", ""): row.get("ファイルID", "") for row in rows}
+
+    for row in targets:
+        file_id = row["ファイルID"]
+        current_name = row["ファイル名"]
+        with st.expander(current_name):
+            if row.get("Drive"):
+                st.link_button("Driveで開く", row["Drive"])
+
+            transaction_date = st.date_input(
+                "取引日",
+                value=default_rename_date(row),
+                key=f"rename_date:{file_id}",
+            )
+            partner_name = st.text_input(
+                "取引先",
+                value=default_rename_partner(row),
+                key=f"rename_partner:{file_id}",
+            )
+            amount_yen = st.number_input(
+                "金額（円）",
+                min_value=0,
+                step=1,
+                value=default_rename_amount(row),
+                key=f"rename_amount:{file_id}",
+            )
+            extension = st.text_input(
+                "拡張子",
+                value=default_rename_extension(row),
+                key=f"rename_extension:{file_id}",
+            )
+
+            preview_name = build_rename_preview_name(
+                transaction_date=transaction_date,
+                partner_name=partner_name,
+                amount_yen=int(amount_yen),
+                extension=extension,
+            )
+            duplicate_id = existing_names.get(preview_name)
+            has_duplicate = bool(duplicate_id and duplicate_id != file_id)
+            st.code(preview_name, language="text")
+            if has_duplicate:
+                st.error("同じ名前のファイルが既にあります。")
+            if amount_yen <= 0:
+                st.warning("金額を入力してください。")
+
+            if st.button(
+                "この名前に変更",
+                key=f"rename_apply:{file_id}",
+                type="primary",
+                use_container_width=True,
+                disabled=has_duplicate or amount_yen <= 0,
+            ):
+                rename_drive_file(file_id=file_id, new_name=preview_name)
+
+
+def rename_drive_file(*, file_id: str, new_name: str) -> None:
+    try:
+        from src.receipt_pipeline import drive_storage_from_secrets
+
+        storage = drive_storage_from_secrets(st.secrets)
+        storage.rename_file(file_id=file_id, new_name=new_name)
+        if ledger().rename_file(drive_file_id=file_id, file_name=new_name):
+            storage.upsert_bytes(
+                file_name="_receipt_index.csv",
+                content=ledger().to_csv_bytes(),
+                mime_type="text/csv",
+            )
+        refresh_drive_filename_audit(storage)
+    except Exception as error:
+        st.error(f"ファイル名の変更に失敗しました: {error}")
+        return
+    st.session_state["drive_filename_audit_notice"] = "ファイル名を変更しました。"
+    st.rerun()
+
+
+def default_rename_date(row: dict[str, str]) -> date:
+    value = row.get("取引日", "")
+    if re.fullmatch(r"\d{8}", value):
+        try:
+            return datetime.strptime(value, "%Y%m%d").date()
+        except ValueError:
+            pass
+    return date.today()
+
+
+def default_rename_partner(row: dict[str, str]) -> str:
+    if row.get("取引先"):
+        return row["取引先"]
+    stem = Path(row.get("ファイル名", "")).stem
+    stem = re.sub(r"^\d{8}[_-]?", "", stem)
+    stem = re.sub(r"[_-]?\d+円?$", "", stem)
+    return stem.strip("._- ") or "取引先未設定"
+
+
+def default_rename_amount(row: dict[str, str]) -> int:
+    value = row.get("金額", "")
+    return int(value) if value.isdigit() else 0
+
+
+def default_rename_extension(row: dict[str, str]) -> str:
+    return row.get("拡張子") or normalize_extension(row.get("ファイル名"), "pdf")
+
+
+def build_rename_preview_name(
+    *,
+    transaction_date: date,
+    partner_name: str,
+    amount_yen: int,
+    extension: str,
+) -> str:
+    metadata = ReceiptMetadata(
+        service_id="",
+        service_label="",
+        target_month="",
+        transaction_date=transaction_date,
+        partner_name=partner_name,
+        amount_yen=amount_yen,
+    )
+    return build_receipt_filename(metadata, extension)
 
 
 def render_settings() -> None:

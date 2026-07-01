@@ -76,6 +76,17 @@ class ReceiptLedger:
         self._write([record, *self.read()])
         return record
 
+    def rename_file(self, *, drive_file_id: str, file_name: str) -> bool:
+        rows = self.read()
+        changed = False
+        for row in rows:
+            if row.get("drive_file_id") == drive_file_id:
+                row["file_name"] = file_name
+                changed = True
+        if changed:
+            self._write(rows)
+        return changed
+
     def to_csv_bytes(self) -> bytes:
         rows = self.read()
         return rows_to_csv_bytes(rows)

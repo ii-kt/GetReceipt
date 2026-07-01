@@ -148,6 +148,19 @@ class DriveStorage:
             if not page_token:
                 return files
 
+    def rename_file(self, *, file_id: str, new_name: str) -> DriveUploadResult:
+        updated = self.service.files().update(
+            fileId=file_id,
+            body={"name": new_name},
+            fields="id,name,webViewLink",
+            supportsAllDrives=True,
+        ).execute()
+        return DriveUploadResult(
+            id=updated.get("id", file_id),
+            name=updated.get("name", new_name),
+            web_view_link=updated.get("webViewLink", ""),
+        )
+
     def _find_first_by_name(self, file_name: str) -> dict[str, str] | None:
         escaped_name = file_name.replace("\\", "\\\\").replace("'", "\\'")
         query = f"name = '{escaped_name}' and '{self.folder_id}' in parents and trashed = false"
