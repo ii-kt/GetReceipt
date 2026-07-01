@@ -4,7 +4,7 @@ import csv
 import os
 import re
 import subprocess
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from io import StringIO
 
 
@@ -36,7 +36,7 @@ from src.config import (
     selectable_months,
     service_by_id,
 )
-from src.ledger import ReceiptLedger, rows_from_csv_bytes, rows_to_csv_bytes
+from src.ledger import CSV_FIELDS, ReceiptLedger, rows_from_csv_bytes, rows_to_csv_bytes
 from src.naming import (
     ReceiptMetadata,
     build_receipt_filename,
@@ -62,6 +62,16 @@ TEXT = {
     "not_issued": "未発行",
     "save_drive": "Driveへ保存",
     "mark_not_issued": "未発行として記録",
+}
+
+HIDDEN_AUDIT_COLUMNS = {
+    "ファイルID",
+    "サービスID",
+    "サービス名",
+    "対象月",
+    "通貨",
+    "取得元URL",
+    "元ファイル名",
 }
 
 
@@ -750,15 +760,20 @@ def build_drive_filename_audit_rows(
             reason = "フォルダです。"
             transaction_date = partner_name = amount_yen = extension = ""
             expected_name = ""
+            ledger_status = "管理"
+            record = {}
         elif name == "_receipt_index.csv":
             status = "管理"
             reason = "保存台帳の同期ファイルです。"
             transaction_date = partner_name = amount_yen = extension = ""
             expected_name = ""
+            ledger_status = "管理"
+            record = {}
         else:
             extension = normalize_extension(name, "pdf")
             record = ledger_by_drive_id.get(file.get("id", ""))
             if record:
+                ledger_status = "登録済"
                 try:
                     expected_name = expected_filename_from_ledger_record(record, extension)
                     status = "OK" if name == expected_name else "要確認"
@@ -779,12 +794,15 @@ def build_drive_filename_audit_rows(
                     expected_name = ""
             else:
                 status = "要確認"
-                reason = "保存台帳にDrive IDがないため、取得本体と同じ生成仕様で照合できません。"
+                reason = "保存台帳に未登録です。下のフォームで取引日・取引先・金額を入れると、台帳登録と名前変更を同時に実行できます。"
                 transaction_date = partner_name = amount_yen = ""
                 expected_name = ""
+                ledger_status = "未登録"
+                record = {}
         rows.append({
             "ファイルID": file.get("id", ""),
             "判定": status,
+            "台帳": ledger_status,
             "ファイル名": name,
             "期待ファイル名": expected_name,
             "理由": reason,
@@ -794,6 +812,12 @@ def build_drive_filename_audit_rows(
             "拡張子": extension,
             "更新日時": file.get("modifiedTime", ""),
             "Drive": file.get("webViewLink", ""),
+            "サービスID": record.get("service_id", ""),
+            "サービス名": record.get("service_label", ""),
+            "対象月": record.get("target_month", ""),
+            "通貨": record.get("currency", "JPY"),
+            "取得元URL": record.get("source_url", ""),
+            "元ファイル名": record.get("original_file_name", ""),
         })
 
     order = {"要確認": 0, "OK": 1, "管理": 2}
@@ -827,7 +851,7 @@ def parse_ledger_transaction_date(value: str) -> date:
 
 
 def audit_display_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
-    return [{key: value for key, value in row.items() if key != "ファイルID"} for row in rows]
+    return [{key: value for key, value in row.items() if key not in HIDDEN_AUDIT_COLUMNS} for row in rows]
 
 
 def audit_rows_to_csv_bytes(rows: list[dict[str, str]]) -> bytes:
@@ -884,54 +908,109 @@ def render_drive_rename_tools(rows: list[dict[str, str]]) -> None:
                 amount_yen=int(amount_yen),
                 extension=extension,
             )
+            metadata = build_rename_metadata(
+                row=row,
+                transaction_date=transaction_date,
+                partner_name=partner_name,
+                amount_yen=int(amount_yen),
+            )
             duplicate_id = existing_names.get(preview_name)
             has_duplicate = bool(duplicate_id and duplicate_id != file_id)
+            missing_partner = not partner_name.strip()
             st.code(preview_name, language="text")
             if has_duplicate:
                 st.error("同じ名前のファイルが既にあります。")
             if amount_yen <= 0:
                 st.warning("金額を入力してください。")
+            if missing_partner:
+                st.warning("取引先を入力してください。")
 
             if st.button(
-                "この名前に変更",
+                "この名前に変更して台帳登録" if row.get("台帳") == "未登録" else "この名前に変更",
                 key=f"rename_apply:{file_id}",
                 type="primary",
                 use_container_width=True,
-                disabled=has_duplicate or amount_yen <= 0,
+                disabled=has_duplicate or amount_yen <= 0 or missing_partner,
             ):
-                rename_drive_file(file_id=file_id, new_name=preview_name)
+                rename_drive_file(
+                    file_id=file_id,
+                    new_name=preview_name,
+                    metadata=metadata,
+                    drive_web_view_link=row.get("Drive", ""),
+                    original_file_name=current_name,
+                )
 
 
-def rename_drive_file(*, file_id: str, new_name: str) -> None:
+def rename_drive_file(
+    *,
+    file_id: str,
+    new_name: str,
+    metadata: ReceiptMetadata,
+    drive_web_view_link: str,
+    original_file_name: str,
+) -> None:
     try:
         from src.receipt_pipeline import drive_storage_from_secrets
 
         storage = drive_storage_from_secrets(st.secrets)
         storage.rename_file(file_id=file_id, new_name=new_name)
-        rename_synced_ledger_file(storage, drive_file_id=file_id, file_name=new_name)
+        rename_synced_ledger_file(
+            storage,
+            drive_file_id=file_id,
+            file_name=new_name,
+            metadata=metadata,
+            drive_web_view_link=drive_web_view_link,
+            original_file_name=original_file_name,
+        )
         refresh_drive_filename_audit(storage)
     except Exception as error:
         st.error(f"ファイル名の変更に失敗しました: {error}")
         return
-    st.session_state["drive_filename_audit_notice"] = "ファイル名を変更しました。"
+    st.session_state["drive_filename_audit_notice"] = "ファイル名を変更し、保存台帳を同期しました。"
     st.rerun()
 
 
-def rename_synced_ledger_file(storage, *, drive_file_id: str, file_name: str) -> bool:
+def rename_synced_ledger_file(
+    storage,
+    *,
+    drive_file_id: str,
+    file_name: str,
+    metadata: ReceiptMetadata,
+    drive_web_view_link: str,
+    original_file_name: str,
+) -> bool:
     rows = load_synced_ledger_rows(storage)
-    changed = False
+    metadata_record = metadata.to_record()
     for row in rows:
         if row.get("drive_file_id") == drive_file_id:
+            row.update(metadata_record)
+            row["status"] = "uploaded"
             row["file_name"] = file_name
-            changed = True
-    if changed:
-        ledger().replace_all(rows)
-        storage.upsert_bytes(
-            file_name="_receipt_index.csv",
-            content=rows_to_csv_bytes(rows),
-            mime_type="text/csv",
-        )
-    return changed
+            row["drive_web_view_link"] = drive_web_view_link or row.get("drive_web_view_link", "")
+            row["source_url"] = metadata.source_url or row.get("source_url", "")
+            row["original_file_name"] = metadata.original_file_name or original_file_name
+            break
+    else:
+        row = {field: "" for field in CSV_FIELDS}
+        row.update({
+            "uploaded_at": datetime.now(timezone.utc).isoformat(),
+            "status": "uploaded",
+            **metadata_record,
+            "file_name": file_name,
+            "drive_file_id": drive_file_id,
+            "drive_web_view_link": drive_web_view_link,
+            "source_url": metadata.source_url,
+            "original_file_name": metadata.original_file_name or original_file_name,
+        })
+        rows.insert(0, row)
+
+    ledger().replace_all(rows)
+    storage.upsert_bytes(
+        file_name="_receipt_index.csv",
+        content=rows_to_csv_bytes(rows),
+        mime_type="text/csv",
+    )
+    return True
 
 
 def default_rename_date(row: dict[str, str]) -> date:
@@ -966,6 +1045,26 @@ def parse_rename_date(value: str) -> date | None:
         return datetime.strptime(value, "%Y%m%d").date()
     except ValueError:
         return None
+
+
+def build_rename_metadata(
+    *,
+    row: dict[str, str],
+    transaction_date: date,
+    partner_name: str,
+    amount_yen: int,
+) -> ReceiptMetadata:
+    return ReceiptMetadata(
+        service_id=row.get("サービスID", ""),
+        service_label=row.get("サービス名", ""),
+        target_month=row.get("対象月") or transaction_date.strftime("%Y-%m"),
+        transaction_date=transaction_date,
+        partner_name=partner_name,
+        amount_yen=normalize_amount_yen(amount_yen),
+        currency=row.get("通貨", "JPY") or "JPY",
+        source_url=row.get("取得元URL") or row.get("Drive", ""),
+        original_file_name=row.get("元ファイル名") or row.get("ファイル名", ""),
+    )
 
 
 def build_rename_preview_name(
