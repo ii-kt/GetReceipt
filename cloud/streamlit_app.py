@@ -846,17 +846,18 @@ def rename_drive_file(*, file_id: str, new_name: str) -> None:
 
 def default_rename_date(row: dict[str, str]) -> date:
     value = row.get("取引日", "")
-    if re.fullmatch(r"\d{8}", value):
-        try:
-            return datetime.strptime(value, "%Y%m%d").date()
-        except ValueError:
-            pass
+    parsed_date = parse_rename_date(value) or parse_rename_date(infer_rename_parts(row).get("date", ""))
+    if parsed_date:
+        return parsed_date
     return date.today()
 
 
 def default_rename_partner(row: dict[str, str]) -> str:
     if row.get("取引先"):
         return row["取引先"]
+    inferred = infer_rename_parts(row)
+    if inferred.get("partner"):
+        return inferred["partner"]
     stem = Path(row.get("ファイル名", "")).stem
     stem = re.sub(r"^\d{8}[_-]?", "", stem)
     stem = re.sub(r"[_-]?\d+円?$", "", stem)
@@ -865,11 +866,48 @@ def default_rename_partner(row: dict[str, str]) -> str:
 
 def default_rename_amount(row: dict[str, str]) -> int:
     value = row.get("金額", "")
-    return int(value) if value.isdigit() else 0
+    if value.isdigit():
+        return int(value)
+    inferred_amount = infer_rename_parts(row).get("amount", "")
+    return int(inferred_amount) if inferred_amount.isdigit() else 0
 
 
 def default_rename_extension(row: dict[str, str]) -> str:
     return row.get("拡張子") or normalize_extension(row.get("ファイル名"), "pdf")
+
+
+def parse_rename_date(value: str) -> date | None:
+    if not re.fullmatch(r"\d{8}", value or ""):
+        return None
+    try:
+        return datetime.strptime(value, "%Y%m%d").date()
+    except ValueError:
+        return None
+
+
+def infer_rename_parts(row: dict[str, str]) -> dict[str, str]:
+    stem = Path(row.get("ファイル名", "")).stem
+    result = {"date": "", "partner": "", "amount": ""}
+
+    date_match = re.match(r"^(?P<date>\d{8})[_-](?P<rest>.+)$", stem)
+    if date_match and parse_rename_date(date_match.group("date")):
+        result["date"] = date_match.group("date")
+        rest = date_match.group("rest")
+        amount_first = re.match(r"^(?P<amount>\d+)[_-](?P<partner>.+)$", rest)
+        if amount_first:
+            result["amount"] = amount_first.group("amount")
+            result["partner"] = amount_first.group("partner").strip("._- ")
+            return result
+        amount_last = re.match(r"^(?P<partner>.+)[_-](?P<amount>\d+)円?$", rest)
+        if amount_last:
+            result["partner"] = amount_last.group("partner").strip("._- ")
+            result["amount"] = amount_last.group("amount")
+            return result
+
+    embedded_date = re.search(r"(20\d{6})", stem)
+    if embedded_date and parse_rename_date(embedded_date.group(1)):
+        result["date"] = embedded_date.group(1)
+    return result
 
 
 def build_rename_preview_name(
