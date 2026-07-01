@@ -129,6 +129,25 @@ class DriveStorage:
             web_view_link=updated.get("webViewLink", existing.get("webViewLink", "")),
         )
 
+    def list_files(self) -> list[dict[str, str]]:
+        files: list[dict[str, str]] = []
+        page_token = None
+        query = f"'{self.folder_id}' in parents and trashed = false"
+        while True:
+            result = self.service.files().list(
+                q=query,
+                fields="nextPageToken,files(id,name,mimeType,size,modifiedTime,webViewLink)",
+                pageSize=1000,
+                pageToken=page_token,
+                orderBy="name",
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+            ).execute()
+            files.extend(result.get("files", []))
+            page_token = result.get("nextPageToken")
+            if not page_token:
+                return files
+
     def _find_first_by_name(self, file_name: str) -> dict[str, str] | None:
         escaped_name = file_name.replace("\\", "\\\\").replace("'", "\\'")
         query = f"name = '{escaped_name}' and '{self.folder_id}' in parents and trashed = false"

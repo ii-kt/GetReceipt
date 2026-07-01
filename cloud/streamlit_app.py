@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import csv
 import os
 import subprocess
+from io import StringIO
 
 
 def cleanup_orphan_acquisition_browsers() -> None:
@@ -36,6 +38,7 @@ from src.ledger import ReceiptLedger
 from src.naming import (
     ReceiptMetadata,
     build_receipt_filename,
+    inspect_receipt_filename,
     normalize_amount_yen,
     normalize_extension,
     sha256_bytes,
@@ -648,6 +651,97 @@ def render_history() -> None:
     )
 
 
+def render_drive_filename_audit() -> None:
+    render_section_heading("Drive folder", "ファイル名チェック", "保存先フォルダ内の全ファイルを確認")
+    st.code("YYYYMMDD_取引先_金額円.拡張子\n例: 20260701_株式会社NTTドコモ_8250円.pdf", language="text")
+    if not secrets_configured():
+        st.warning("Google Drive用のSecretsが未設定です。")
+        return
+
+    if st.button("フォルダ内のファイル名を確認", type="primary", use_container_width=True):
+        try:
+            from src.receipt_pipeline import drive_storage_from_secrets
+
+            storage = drive_storage_from_secrets(st.secrets)
+            rows = build_drive_filename_audit_rows(storage.list_files())
+        except Exception as error:
+            st.error(f"Driveフォルダの確認に失敗しました: {error}")
+            return
+        st.session_state["drive_filename_audit_rows"] = rows
+
+    rows = st.session_state.get("drive_filename_audit_rows", [])
+    if not rows:
+        return
+
+    total = len(rows)
+    ok_count = sum(row["判定"] == "OK" for row in rows)
+    review_count = sum(row["判定"] == "要確認" for row in rows)
+    managed_count = sum(row["判定"] == "管理" for row in rows)
+    cols = st.columns(4)
+    cols[0].metric("確認ファイル", total)
+    cols[1].metric("OK", ok_count)
+    cols[2].metric("要確認", review_count)
+    cols[3].metric("管理", managed_count)
+
+    st.dataframe(
+        rows,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Drive": st.column_config.LinkColumn("Drive"),
+        },
+    )
+    st.download_button(
+        "確認結果CSVをダウンロード",
+        data=audit_rows_to_csv_bytes(rows),
+        file_name="drive_filename_audit.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+
+def build_drive_filename_audit_rows(files: list[dict[str, str]]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for file in files:
+        name = file.get("name", "")
+        mime_type = file.get("mimeType", "")
+        if mime_type == "application/vnd.google-apps.folder":
+            status = "管理"
+            reason = "フォルダです。"
+            transaction_date = partner_name = amount_yen = extension = ""
+        else:
+            inspection = inspect_receipt_filename(name)
+            status = inspection.status
+            reason = inspection.reason
+            transaction_date = inspection.transaction_date
+            partner_name = inspection.partner_name
+            amount_yen = inspection.amount_yen
+            extension = inspection.extension
+        rows.append({
+            "判定": status,
+            "ファイル名": name,
+            "理由": reason,
+            "取引日": transaction_date,
+            "取引先": partner_name,
+            "金額": amount_yen,
+            "拡張子": extension,
+            "更新日時": file.get("modifiedTime", ""),
+            "Drive": file.get("webViewLink", ""),
+        })
+
+    order = {"要確認": 0, "OK": 1, "管理": 2}
+    return sorted(rows, key=lambda row: (order.get(row["判定"], 9), row["ファイル名"]))
+
+
+def audit_rows_to_csv_bytes(rows: list[dict[str, str]]) -> bytes:
+    buffer = StringIO()
+    fieldnames = list(rows[0].keys()) if rows else []
+    writer = csv.DictWriter(buffer, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(rows)
+    return buffer.getvalue().encode("utf-8-sig")
+
+
 def render_settings() -> None:
     render_section_heading("Connection", TEXT["settings"], "Google Driveとの連携状態")
     st.write("Google Drive保存先")
@@ -705,6 +799,8 @@ render_workspace_header()
 tabs = st.tabs([TEXT["dashboard"]])
 with tabs[0]:
     render_acquisition_workspace()
+    with st.expander("ファイル名チェック"):
+        render_drive_filename_audit()
     with st.expander(TEXT["ledger"]):
         render_history()
     with st.expander(TEXT["settings"]):
