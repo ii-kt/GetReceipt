@@ -270,9 +270,9 @@ def render_dashboard() -> bool:
     st.markdown(
         """
         <div class="gr-status-key" aria-label="保管状態の凡例">
-          <span class="is-open"><i></i>未取得 — クリックして取得へ</span>
-          <span class="is-done"><i></i>取得済 — 保管済み</span>
-          <span class="is-none"><i></i>未発行 — 記録済み</span>
+          <span class="is-open"><i></i>未取得: クリックして取得へ</span>
+          <span class="is-done"><i></i>取得済: 保管済み</span>
+          <span class="is-none"><i></i>未発行: 記録済み</span>
         </div>
         """,
         unsafe_allow_html=True,

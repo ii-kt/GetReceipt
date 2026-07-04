@@ -3,7 +3,7 @@ from __future__ import annotations
 import streamlit as st
 
 
-DESIGN_SOURCE = "shadcn/ui skill + Material UI theming skill + Magic UI visual direction"
+DESIGN_SOURCE = "Taste Skill v2 redesign rules"
 
 
 def inject_design() -> None:
@@ -11,234 +11,234 @@ def inject_design() -> None:
         """
         <style>
         :root {
-          --gr-bg: #0e0f14;
-          --gr-panel: rgba(22, 24, 34, .86);
-          --gr-panel-solid: #171a25;
-          --gr-ink: #f8fbff;
-          --gr-muted: #aeb8c7;
-          --gr-rule: rgba(255, 255, 255, .14);
-          --gr-cyan: #38d5ff;
-          --gr-green: #00e0a4;
-          --gr-pink: #ff4fd8;
-          --gr-amber: #ffb020;
-          --gr-red: #ff5d5d;
-          --gr-lime: #c9ff4f;
-          --gr-shadow: rgba(0, 224, 164, .18);
+          --gr-bg: #f3f5f7;
+          --gr-surface: #ffffff;
+          --gr-surface-alt: #eef1f5;
+          --gr-ink: #16181d;
+          --gr-muted: #66707f;
+          --gr-faint: #8b95a5;
+          --gr-border: #d8dde5;
+          --gr-border-strong: #b8c0cc;
+          --gr-accent: #2457ff;
+          --gr-accent-soft: #e8edff;
+          --gr-success: #0f7d58;
+          --gr-warning: #9b6200;
+          --gr-danger: #b42318;
+          --gr-shadow: 0 18px 42px rgba(18, 25, 38, .09);
+          --gr-radius: 6px;
+          --gr-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
         }
 
         .stApp {
           background:
-            linear-gradient(135deg, rgba(56, 213, 255, .10), transparent 28%),
-            linear-gradient(315deg, rgba(255, 79, 216, .11), transparent 32%),
-            repeating-linear-gradient(90deg, rgba(255,255,255,.035) 0 1px, transparent 1px 46px),
-            repeating-linear-gradient(0deg, rgba(255,255,255,.026) 0 1px, transparent 1px 46px),
+            linear-gradient(90deg, rgba(36, 87, 255, .05) 0 1px, transparent 1px 100%),
             var(--gr-bg);
           color: var(--gr-ink);
         }
 
         [data-testid="stHeader"] {
-          background: transparent;
+          background: rgba(243, 245, 247, .94);
+          border-bottom: 1px solid rgba(216, 221, 229, .72);
         }
 
         .block-container {
-          max-width: 1240px;
-          padding-top: 1rem;
+          max-width: 1180px;
+          padding-top: 1.15rem;
           padding-bottom: 3rem;
         }
 
         .gr-app-header {
-          position: relative;
           display: grid;
-          grid-template-columns: minmax(0, 1fr) auto;
-          gap: 1.25rem;
-          align-items: end;
-          padding: 1.35rem 1.4rem 1.25rem;
-          border: 1px solid var(--gr-rule);
-          border-radius: 8px;
+          grid-template-columns: minmax(0, 1fr) minmax(220px, 300px);
+          gap: 1rem;
+          align-items: stretch;
           margin-bottom: 1rem;
-          background:
-            linear-gradient(90deg, rgba(0, 224, 164, .20), rgba(56, 213, 255, .10) 44%, rgba(255, 79, 216, .18)),
-            var(--gr-panel);
-          box-shadow: 0 18px 55px rgba(0, 0, 0, .34), inset 0 1px 0 rgba(255,255,255,.18);
-          overflow: hidden;
         }
 
-        .gr-app-header:after {
-          content: "";
-          position: absolute;
-          left: 1.4rem;
-          right: 0;
-          bottom: 0;
-          height: 4px;
-          background: linear-gradient(90deg, var(--gr-green), var(--gr-cyan), var(--gr-pink), var(--gr-amber));
+        .gr-header-main,
+        .gr-header-aside {
+          border: 1px solid var(--gr-border);
+          border-radius: var(--gr-radius);
+          background: var(--gr-surface);
+          box-shadow: var(--gr-shadow);
+        }
+
+        .gr-header-main {
+          padding: 1.35rem 1.4rem 1.25rem;
+          border-left: 6px solid var(--gr-accent);
         }
 
         .gr-kicker {
-          display: inline-flex;
-          align-items: center;
-          gap: .5rem;
-          font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+          color: var(--gr-accent);
+          font-family: var(--gr-mono);
           font-size: .74rem;
           font-weight: 800;
-          letter-spacing: .08em;
-          color: var(--gr-lime);
+          letter-spacing: .04em;
           text-transform: uppercase;
-        }
-
-        .gr-kicker:before {
-          content: "";
-          width: .62rem;
-          height: .62rem;
-          background: var(--gr-green);
-          box-shadow: 0 0 18px var(--gr-green);
-          border-radius: 50%;
         }
 
         .gr-title {
-          margin: .35rem 0 .2rem;
-          font-family: "Arial Black", "Yu Gothic", "Hiragino Sans", sans-serif;
-          font-size: 2.55rem;
-          line-height: 1.02;
+          margin: .35rem 0 .25rem;
+          color: var(--gr-ink);
+          font-size: clamp(2rem, 4vw, 3.45rem);
+          line-height: .96;
           font-weight: 900;
-          text-transform: uppercase;
-          text-shadow: 0 0 28px rgba(56, 213, 255, .35);
+          letter-spacing: 0;
         }
 
         .gr-subtitle,
         .gr-section-detail {
           color: var(--gr-muted);
-          font-size: .93rem;
-          line-height: 1.65;
-        }
-
-        .gr-header-aside {
-          min-width: 190px;
-          padding: .85rem;
-          border: 1px solid rgba(255, 255, 255, .18);
-          border-radius: 8px;
-          background: rgba(8, 10, 18, .46);
-          font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-        }
-
-        .gr-header-aside b {
-          display: block;
-          color: var(--gr-green);
-          font-size: .82rem;
-          margin-bottom: .45rem;
-        }
-
-        .gr-header-aside span {
-          display: block;
-          color: var(--gr-muted);
-          font-size: .75rem;
+          font-size: .94rem;
           line-height: 1.55;
         }
 
+        .gr-header-aside {
+          display: grid;
+          align-content: stretch;
+          padding: 0;
+          overflow: hidden;
+        }
+
+        .gr-aside-row {
+          display: grid;
+          grid-template-columns: 1fr auto;
+          gap: .75rem;
+          align-items: center;
+          min-height: 48px;
+          padding: .78rem .92rem;
+          border-bottom: 1px solid var(--gr-border);
+        }
+
+        .gr-aside-row:last-child {
+          border-bottom: 0;
+        }
+
+        .gr-aside-row span {
+          color: var(--gr-muted);
+          font-size: .76rem;
+          font-weight: 750;
+        }
+
+        .gr-aside-row b {
+          color: var(--gr-ink);
+          font-family: var(--gr-mono);
+          font-size: .82rem;
+        }
+
         .gr-section {
-          display: flex;
-          align-items: flex-end;
-          justify-content: space-between;
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(220px, 360px);
           gap: 1rem;
-          padding: 1rem 0 .65rem;
-          border-bottom: 1px solid var(--gr-rule);
-          margin: .95rem 0 1rem;
+          align-items: end;
+          margin: 1.15rem 0 .85rem;
+          padding-bottom: .7rem;
+          border-bottom: 1px solid var(--gr-border);
         }
 
         .gr-section-eyebrow {
-          font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+          color: var(--gr-accent);
+          font-family: var(--gr-mono);
           font-size: .72rem;
-          font-weight: 850;
-          color: var(--gr-cyan);
-          letter-spacing: .08em;
+          font-weight: 800;
+          letter-spacing: .04em;
           text-transform: uppercase;
         }
 
         .gr-section-title {
-          margin: .18rem 0 0;
-          font-size: 1.38rem;
+          margin-top: .15rem;
+          color: var(--gr-ink);
+          font-size: 1.34rem;
           line-height: 1.25;
-          font-weight: 900;
+          font-weight: 860;
+          letter-spacing: 0;
         }
 
         [data-testid="stMetric"] {
-          background:
-            linear-gradient(180deg, rgba(255, 255, 255, .075), rgba(255, 255, 255, .025)),
-            var(--gr-panel-solid);
-          border: 1px solid var(--gr-rule);
-          border-radius: 8px;
-          padding: .85rem .95rem;
-          min-height: 94px;
-          box-shadow: 0 14px 34px rgba(0, 0, 0, .24);
+          min-height: 90px;
+          padding: .85rem .92rem;
+          border: 1px solid var(--gr-border);
+          border-radius: var(--gr-radius);
+          background: var(--gr-surface);
+          box-shadow: 0 10px 24px rgba(18, 25, 38, .06);
         }
 
         [data-testid="stMetricLabel"] {
           color: var(--gr-muted);
-          font-size: .8rem;
+          font-size: .78rem;
+          font-weight: 760;
         }
 
         [data-testid="stMetricValue"] {
           color: var(--gr-ink);
-          font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-          text-shadow: 0 0 18px rgba(56, 213, 255, .24);
+          font-family: var(--gr-mono);
+          font-size: 1.72rem;
+          font-weight: 850;
         }
 
         div[data-testid="stTabs"] [role="tablist"] {
-          gap: .5rem;
+          gap: .35rem;
           overflow-x: auto;
-          border-bottom: 1px solid rgba(255, 255, 255, .12);
-          padding-bottom: .45rem;
+          padding: .35rem;
+          border: 1px solid var(--gr-border);
+          border-radius: var(--gr-radius);
+          background: var(--gr-surface);
+          box-shadow: 0 10px 24px rgba(18, 25, 38, .05);
         }
 
         div[data-testid="stTabs"] button[role="tab"] {
-          border-radius: 8px;
-          border: 1px solid var(--gr-rule);
-          background: rgba(255,255,255,.05);
+          min-height: 38px;
+          border-radius: 4px;
           color: var(--gr-muted);
-          min-height: 36px;
+          font-weight: 760;
         }
 
         div[data-testid="stTabs"] button[aria-selected="true"] {
-          color: var(--gr-ink);
-          background: linear-gradient(90deg, rgba(0,224,164,.25), rgba(56,213,255,.18));
-          border-color: rgba(56,213,255,.44);
+          color: #ffffff;
+          background: var(--gr-accent);
+        }
+
+        div[data-testid="stTabs"] button[aria-selected="true"] p {
+          color: #ffffff;
         }
 
         .gr-status-key {
-          display: flex;
-          flex-wrap: wrap;
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
           gap: .55rem;
-          margin: .2rem 0 1rem;
+          margin: .15rem 0 1rem;
         }
 
         .gr-status-key span {
-          display: inline-flex;
+          display: grid;
+          grid-template-columns: 5px minmax(0, 1fr);
+          gap: .6rem;
           align-items: center;
-          gap: .45rem;
-          min-height: 2.1rem;
-          padding: .25rem .65rem;
-          border: 1px solid var(--gr-rule);
-          border-radius: 8px;
-          background: rgba(255, 255, 255, .06);
-          font-size: .78rem;
-          font-weight: 800;
+          min-height: 38px;
+          padding: .42rem .62rem;
+          border: 1px solid var(--gr-border);
+          border-radius: var(--gr-radius);
+          background: var(--gr-surface);
           color: var(--gr-ink);
+          font-size: .8rem;
+          font-weight: 760;
         }
 
         .gr-status-key i {
-          display: inline-block;
-          width: .62rem;
-          height: .62rem;
-          border-radius: 50%;
+          width: 5px;
+          height: 24px;
+          border-radius: 2px;
         }
 
-        .gr-status-key .is-open i { background: var(--gr-cyan); box-shadow: 0 0 14px var(--gr-cyan); }
-        .gr-status-key .is-done i { background: var(--gr-green); }
-        .gr-status-key .is-none i { background: var(--gr-amber); }
+        .gr-status-key .is-open i { background: var(--gr-accent); }
+        .gr-status-key .is-done i { background: var(--gr-success); }
+        .gr-status-key .is-none i { background: var(--gr-warning); }
 
         .gr-month-cell {
           display: flex;
-          min-height: 44px;
+          min-height: 42px;
           align-items: center;
+          color: var(--gr-ink);
           font-size: .86rem;
           font-weight: 800;
         }
@@ -246,85 +246,84 @@ def inject_design() -> None:
         .stButton > button,
         .stDownloadButton > button,
         [data-testid="stLinkButton"] > a {
-          min-height: 42px;
-          border-radius: 8px;
-          font-weight: 750;
-          border-color: rgba(255, 255, 255, .18);
-          box-shadow: 0 12px 22px rgba(0,0,0,.18);
+          min-height: 40px;
+          border-radius: var(--gr-radius);
+          border: 1px solid var(--gr-border-strong);
+          background: var(--gr-surface);
+          color: var(--gr-ink);
+          font-weight: 760;
+          box-shadow: none;
         }
 
         .stButton > button[kind="primary"],
         .stDownloadButton > button[kind="primary"] {
-          background: linear-gradient(90deg, var(--gr-green), var(--gr-cyan));
-          border-color: rgba(56, 213, 255, .55);
-          color: #061014;
+          border-color: var(--gr-accent);
+          background: var(--gr-accent);
+          color: #ffffff;
         }
 
         .stButton > button:hover,
         .stDownloadButton > button:hover,
         [data-testid="stLinkButton"] > a:hover {
-          transform: translateY(-1px);
-          box-shadow: 0 16px 30px rgba(0,0,0,.24), 0 0 24px var(--gr-shadow);
+          border-color: var(--gr-accent);
+          color: var(--gr-accent);
+          box-shadow: 0 0 0 3px rgba(36, 87, 255, .12);
+        }
+
+        .stButton > button[kind="primary"]:hover,
+        .stDownloadButton > button[kind="primary"]:hover {
+          color: #ffffff;
+          background: #1746e6;
         }
 
         div[data-testid="stExpander"] {
-          border-color: var(--gr-rule);
-          border-radius: 8px;
-          background: rgba(22, 24, 34, .72);
+          border: 1px solid var(--gr-border);
+          border-radius: var(--gr-radius);
+          background: var(--gr-surface);
+          box-shadow: 0 8px 18px rgba(18, 25, 38, .05);
         }
 
         div[data-testid="stDataFrame"] {
-          border: 1px solid var(--gr-rule);
-          border-radius: 8px;
           overflow: hidden;
-        }
-
-        code {
-          border-radius: 8px;
-          border: 1px solid rgba(56, 213, 255, .20);
+          border: 1px solid var(--gr-border);
+          border-radius: var(--gr-radius);
+          background: var(--gr-surface);
         }
 
         [data-testid="stAlert"] {
-          border-radius: 8px;
-          border: 1px solid rgba(255, 176, 32, .36);
+          border-radius: var(--gr-radius);
+          border: 1px solid var(--gr-border);
+          background: var(--gr-surface);
+        }
+
+        code {
+          border: 1px solid var(--gr-border);
+          border-radius: var(--gr-radius);
+          background: var(--gr-surface-alt);
+          color: var(--gr-ink);
         }
 
         input, textarea, select {
-          border-radius: 8px !important;
+          border-radius: var(--gr-radius) !important;
         }
 
-        @media (prefers-reduced-motion: no-preference) {
-          .gr-app-header {
-            animation: gr-pop .45s ease-out both;
-          }
-
-          @keyframes gr-pop {
-            from { opacity: 0; transform: translateY(8px); }
-            to { opacity: 1; transform: translateY(0); }
-          }
+        hr {
+          border-color: var(--gr-border);
         }
 
-        @media (max-width: 720px) {
+        @media (max-width: 760px) {
           .block-container {
-            padding-left: 1rem;
-            padding-right: 1rem;
+            padding-left: .9rem;
+            padding-right: .9rem;
           }
 
-          .gr-title {
-            font-size: 1.9rem;
-          }
-
+          .gr-app-header,
           .gr-section {
-            display: block;
-          }
-
-          .gr-app-header {
             grid-template-columns: 1fr;
-            padding: 1.1rem;
           }
 
-          .gr-header-aside {
-            min-width: 0;
+          .gr-status-key {
+            grid-template-columns: 1fr;
           }
         }
         </style>
@@ -337,26 +336,21 @@ def render_app_header(*, saved_count: int, open_slots: int, done_slots: int, cur
     st.markdown(
         f"""
         <div class="gr-app-header">
-          <div>
-            <div class="gr-kicker">GETRECEIPT CONTROL</div>
-            <div class="gr-title">Receipt Command</div>
-            <div class="gr-subtitle">家賃、通信、電気、携帯の月次アーカイブ。</div>
+          <div class="gr-header-main">
+            <div class="gr-kicker">GetReceipt</div>
+            <div class="gr-title">Receipt operations</div>
+            <div class="gr-subtitle">Drive保存、取得状況、台帳監査を一画面で処理します。</div>
           </div>
           <div class="gr-header-aside">
-            <b>ACTIVE LEDGER</b>
-            <span>OPEN SLOTS {open_slots}</span>
-            <span>SAVED FILES {saved_count}</span>
-            <span>{current_month}</span>
+            <div class="gr-aside-row"><span>保存済ファイル</span><b>{saved_count}</b></div>
+            <div class="gr-aside-row"><span>未取得枠</span><b>{open_slots}</b></div>
+            <div class="gr-aside-row"><span>保管完了枠</span><b>{done_slots}</b></div>
+            <div class="gr-aside-row"><span>現在の対象</span><b>{current_month}</b></div>
           </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    cols = st.columns(4)
-    cols[0].metric("保存済ファイル", saved_count)
-    cols[1].metric("未取得枠", open_slots)
-    cols[2].metric("保管完了枠", done_slots)
-    cols[3].metric("現在の対象", current_month)
 
 
 def render_section_heading(eyebrow: str, title: str, detail: str) -> None:
