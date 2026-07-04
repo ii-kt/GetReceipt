@@ -201,6 +201,77 @@ def service_fetcher(service_id: str, browser: ManagedBrowser):
     raise KeyError(service_id)
 
 
+def run_auto_receipt_acquisition(service_id: str, selected_month: str) -> dict[str, str] | None:
+    service = service_by_id(service_id)
+    if not secrets_configured():
+        st.error("Google Drive用のSecretsが未設定です。先に設定してください。")
+        return None
+    if not login_secrets_configured(service_id):
+        st.error(f"{service.label}のログインSecretsが未設定です。設定タブの形式でStreamlit Cloud Secretsへ追加してください。")
+        return None
+
+    from src.automation.browser_session import BrowserAutomationError
+    from src.automation.epos import AcquisitionError
+    from src.workflows.receipt_pipeline import drive_storage_from_secrets, upload_auto_receipt_to_drive
+
+    status_box = st.status(f"{service.label} / {month_label(selected_month)} の自動取得を開始しています。", expanded=True)
+    browser = automation_browser(service_id)
+    try:
+        with status_box as status:
+            status.write("Streamlit Cloud内の取得用Chromiumを起動します。iPhone側に別画面は開きません。")
+            status.write("Secretsのログイン情報でログインし、対象明細を取得します。")
+            fetcher = service_fetcher(service_id, browser)
+            statement = fetcher.fetch_pdf(selected_month)
+            status.write(f"PDF取得完了: {len(statement.content):,} bytes")
+            status.write("Google Driveへ保存し、保存台帳を同期します。")
+            storage = drive_storage_from_secrets(st.secrets)
+            saved = upload_auto_receipt_to_drive(
+                service_id=service_id,
+                target_month=selected_month,
+                content=statement.content,
+                original_file_name=statement.original_file_name,
+                source_url=statement.source_url,
+                metadata_text=statement.metadata_text,
+                storage=storage,
+                ledger=ledger(),
+            )
+            status.update(label=f"{service.label} / {month_label(selected_month)} の取得とDrive保存が完了しました。", state="complete")
+    except AcquisitionError as error:
+        status_box.update(label=f"{service.label} / {month_label(selected_month)} の取得に失敗しました。", state="error")
+        st.warning(str(error))
+        st.caption(f"エラーコード: {error.code}")
+        if error.advice:
+            st.info(error.advice)
+        show_browser_failure_snapshot(service_id, browser)
+        release_automation_browser(service_id, browser, clear_profile=False)
+        return None
+    except (BrowserAutomationError, Exception) as error:
+        status_box.update(label=f"{service.label} / {month_label(selected_month)} の取得に失敗しました。", state="error")
+        st.error(f"取得に失敗しました: {error}")
+        show_browser_failure_snapshot(service_id, browser)
+        release_automation_browser(service_id, browser, clear_profile=False)
+        return None
+
+    st.success("PDFを取得し、Google Driveへ保存しました。")
+    for line in statement.logs:
+        st.caption(line)
+    if saved.get("drive_web_view_link"):
+        st.link_button("Driveで開く", saved["drive_web_view_link"])
+    release_automation_browser(service_id, browser)
+    return saved
+
+
+def show_browser_failure_snapshot(service_id: str, browser: ManagedBrowser) -> None:
+    try:
+        update_browser_image(service_id, browser)
+    except Exception as snapshot_error:
+        st.caption(f"取得用ブラウザのスクリーンショット取得にも失敗しました: {snapshot_error}")
+        return
+    image_bytes = st.session_state.get(browser_image_key(service_id))
+    if image_bytes:
+        st.image(image_bytes, caption="停止時点の取得用ブラウザ")
+
+
 def latest_status_by_month(records: list[dict[str, str]]) -> dict[tuple[str, str], dict[str, str]]:
     latest: dict[tuple[str, str], dict[str, str]] = {}
     for record in records:
@@ -253,7 +324,7 @@ def render_dashboard() -> bool:
         st.warning(f"ログインSecrets未設定: {'、'.join(missing_logins)}")
     else:
         st.success("Drive保存と全サービスのログインSecretsを確認済みです。")
-    st.caption("未取得を押すと、対象月とサービスを取得フォームへ反映します。")
+    st.caption("未取得を押すと、その対象をログインからDrive保存まで自動取得します。")
 
     acquisition_active = bool(st.session_state.get("_acq_active_from_status"))
     if acquisition_active:
@@ -306,12 +377,8 @@ def render_dashboard() -> bool:
                 use_container_width=True,
             ):
                 select_for_acquisition(service.id, target_month)
-                st.session_state["_acq_active_from_status"] = True
-                st.session_state["_acq_status_notice"] = (
-                    f"{service.label} / {month_label(target_month)}を取得対象にしました。"
-                    "下の取得フォームでログイン状態を確認してから保存してください。"
-                )
-                st.rerun()
+                run_auto_receipt_acquisition(service.id, target_month)
+                st.stop()
 
     return acquisition_active
 
@@ -371,44 +438,31 @@ def render_acquisition_form() -> None:
 
 
 def render_official_auto_acquisition(service_id: str, selected_month: str) -> None:
-    st.markdown("**取得用ブラウザ**")
+    st.markdown("**自動取得**")
     service = service_by_id(service_id)
     image_key = browser_image_key(service_id)
 
-    controls = st.columns([1, 1, 1])
-    if controls[0].button("自動ログイン開始", key=f"open_browser:{service_id}", type="primary", use_container_width=True):
-        if not login_secrets_configured(service_id):
-            st.error(f"{service.label}のログインSecretsが未設定です。設定タブの形式でStreamlit Cloud Secretsへ追加してください。")
-            return
-        status_box = None
-        browser = automation_browser(service_id)
-        fetcher = service_fetcher(service_id, browser)
-        try:
-            status_box = st.status(f"{service.label}の自動ログインを実行しています。", expanded=True)
-            with status_box as status:
-                status.write("取得用ブラウザを起動し、ログイン画面へ進みます。")
-                fetcher.open_portal()
-                status.write("ログイン完了を確認しました。")
-                update_browser_image(service_id, browser)
-                status.update(label=f"{service.label}のログイン完了を確認しました。", state="complete")
-                release_automation_browser(service_id, browser)
-        except Exception as error:
-            if status_box:
-                status_box.update(label=f"{service.label}の自動ログインに失敗しました。", state="error")
-            st.error(f"自動ログインに失敗しました: {error}")
-            release_automation_browser(service_id, browser)
+    st.caption("iPhoneに別ウィンドウは開かず、Streamlit Cloud内の取得用ブラウザでログインからDrive保存まで実行します。")
+    if st.button(
+        "自動ログイン・PDF取得・Drive保存",
+        key=f"fetch_pdf:{service_id}",
+        type="primary",
+        use_container_width=True,
+    ):
+        run_auto_receipt_acquisition(service_id, selected_month)
 
-    if controls[1].button("画面更新", key=f"refresh_browser:{service_id}", use_container_width=True):
+    controls = st.columns([1, 1])
+    if controls[0].button("停止時点の画面を更新", key=f"refresh_browser:{service_id}", use_container_width=True):
         try:
             browser = st.session_state.get(f"_automation_browser_{service_id}")
             if browser is None:
-                st.info("取得用ブラウザはまだ起動していません。")
+                st.info("現在表示できる取得用ブラウザはありません。")
             else:
                 update_browser_image(service_id, browser)
         except Exception as error:
             st.error(f"画面更新に失敗しました: {error}")
 
-    if controls[2].button("セッション終了", key=f"close_browser:{service_id}", use_container_width=True):
+    if controls[1].button("取得セッション終了", key=f"close_browser:{service_id}", use_container_width=True):
         try:
             browser = st.session_state.get(f"_automation_browser_{service_id}")
             if browser is not None:
@@ -421,65 +475,6 @@ def render_official_auto_acquisition(service_id: str, selected_month: str) -> No
     image_bytes = st.session_state.get(image_key)
     if image_bytes:
         st.image(image_bytes)
-
-    if st.button("PDFを取得してDriveへ保存", key=f"fetch_pdf:{service_id}", type="primary", use_container_width=True):
-        if not secrets_configured():
-            st.error("Google Drive用のSecretsが未設定です。先に設定してください。")
-            return
-        if not login_secrets_configured(service_id):
-            st.error(f"{service.label}のログインSecretsが未設定です。設定タブの形式でStreamlit Cloud Secretsへ追加してください。")
-            return
-        status_box = None
-        from src.automation.browser_session import BrowserAutomationError
-        from src.automation.epos import AcquisitionError
-
-        browser = automation_browser(service_id)
-        fetcher = service_fetcher(service_id, browser)
-        try:
-            status_box = st.status(f"{service.label}の取得を実行しています。", expanded=True)
-            with status_box as status:
-                status.write("ログイン、明細取得、PDF生成を自動で進めます。")
-                statement = fetcher.fetch_pdf(selected_month)
-                status.write("Google Driveへ保存しています。")
-                from src.workflows.receipt_pipeline import drive_storage_from_secrets, upload_auto_receipt_to_drive
-
-                storage = drive_storage_from_secrets(st.secrets)
-                saved = upload_auto_receipt_to_drive(
-                    service_id=service_id,
-                    target_month=selected_month,
-                    content=statement.content,
-                    original_file_name=statement.original_file_name,
-                    source_url=statement.source_url,
-                    metadata_text=statement.metadata_text,
-                    storage=storage,
-                    ledger=ledger(),
-                )
-                status.update(label=f"{service.label}の取得とDrive保存が完了しました。", state="complete")
-        except AcquisitionError as error:
-            if status_box:
-                status_box.update(label=f"{service.label}の取得に失敗しました。", state="error")
-            st.warning(str(error))
-            if error.advice:
-                st.info(error.advice)
-            try:
-                update_browser_image(service_id, browser)
-            except Exception:
-                pass
-            release_automation_browser(service_id, browser)
-            return
-        except (BrowserAutomationError, Exception) as error:
-            if status_box:
-                status_box.update(label=f"{service.label}の取得に失敗しました。", state="error")
-            st.error(f"取得に失敗しました: {error}")
-            release_automation_browser(service_id, browser)
-            return
-
-        st.success("PDFを取得し、Google Driveへ保存しました。")
-        for line in statement.logs:
-            st.caption(line)
-        if saved.get("drive_web_view_link"):
-            st.link_button("Driveで開く", saved["drive_web_view_link"])
-        release_automation_browser(service_id, browser)
 
 
 def render_acquisition_workspace() -> None:
