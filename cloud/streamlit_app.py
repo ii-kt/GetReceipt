@@ -1,11 +1,7 @@
 from __future__ import annotations
 
-import csv
 import os
-import re
 import subprocess
-from datetime import date, datetime, timezone
-from io import StringIO
 
 
 def cleanup_orphan_acquisition_browsers() -> None:
@@ -25,7 +21,29 @@ cleanup_orphan_acquisition_browsers()
 
 import streamlit as st
 
-from src.acquisition import acquisition_guidance, default_transaction_date
+from src.domain.ledger import ReceiptLedger
+from src.domain.naming import (
+    ReceiptMetadata,
+    build_receipt_filename,
+    normalize_amount_yen,
+    normalize_extension,
+    sha256_bytes,
+)
+from src.ui import styles as ui_styles
+from src.workflows.acquisition import acquisition_guidance, default_transaction_date
+from src.workflows.filename_audit import (
+    audit_display_rows,
+    audit_rows_to_csv_bytes,
+    audit_summary,
+    build_rename_metadata,
+    build_rename_preview_name,
+    default_rename_amount,
+    default_rename_date,
+    default_rename_extension,
+    default_rename_partner,
+    refresh_drive_filename_audit as refresh_filename_audit,
+    rename_synced_ledger_file,
+)
 from src.config import (
     DATA_DIR,
     LEDGER_PATH,
@@ -36,14 +54,6 @@ from src.config import (
     selectable_months,
     service_by_id,
 )
-from src.ledger import CSV_FIELDS, ReceiptLedger, rows_from_csv_bytes, rows_to_csv_bytes
-from src.naming import (
-    ReceiptMetadata,
-    build_receipt_filename,
-    normalize_amount_yen,
-    normalize_extension,
-    sha256_bytes,
-)
 
 st.set_page_config(
     page_title="GetReceipt",
@@ -53,6 +63,8 @@ st.set_page_config(
 
 TEXT = {
     "dashboard": "取得状況",
+    "manual_upload": "ファイル追加",
+    "filename_audit": "ファイル名監査",
     "ledger": "保存台帳",
     "settings": "設定",
     "target_month": "対象月",
@@ -64,78 +76,9 @@ TEXT = {
     "mark_not_issued": "未発行として記録",
 }
 
-HIDDEN_AUDIT_COLUMNS = {
-    "ファイルID",
-    "サービスID",
-    "サービス名",
-    "対象月",
-    "通貨",
-    "取得元URL",
-    "元ファイル名",
-}
-
 
 def inject_design() -> None:
-    st.markdown(
-        """
-        <style>
-        .block-container {
-          max-width: 1120px;
-          padding-top: 1.5rem;
-        }
-
-        div[data-testid="stTabs"] [role="tablist"] {
-          gap: .4rem;
-          overflow-x: auto;
-        }
-
-        .gr-status-key {
-          display: flex;
-          flex-wrap: wrap;
-          gap: .55rem;
-          margin: .2rem 0 1rem;
-        }
-
-        .gr-status-key span {
-          display: inline-flex;
-          align-items: center;
-          gap: .45rem;
-          min-height: 2.1rem;
-          padding: .25rem .65rem;
-          border: 1px solid #d5d7de;
-          border-radius: 999px;
-          font-size: .78rem;
-          font-weight: 700;
-        }
-
-        .gr-status-key i {
-          display: inline-block;
-          width: .62rem;
-          height: .62rem;
-          border-radius: 50%;
-        }
-
-        .gr-status-key .is-open i { background: #2563eb; }
-        .gr-status-key .is-done i { background: #16a34a; }
-        .gr-status-key .is-none i { background: #d97706; }
-
-        .gr-month-cell {
-          display: flex;
-          min-height: 44px;
-          align-items: center;
-          font-size: .86rem;
-          font-weight: 700;
-        }
-
-        .stButton > button,
-        .stDownloadButton > button,
-        [data-testid="stLinkButton"] > a {
-          min-height: 42px;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+    ui_styles.inject_design()
 
 
 def ledger() -> ReceiptLedger:
@@ -210,7 +153,7 @@ def login_secrets_configured(service_id: str) -> bool:
 
 
 def automation_browser(service_id: str) -> ManagedBrowser:
-    from src.browser_session import ManagedBrowser
+    from src.automation.browser_session import ManagedBrowser
 
     browser_key = f"_automation_browser_{service_id}"
     browser = st.session_state.get(browser_key)
@@ -240,19 +183,19 @@ def release_automation_browser(service_id: str, browser: ManagedBrowser, *, clea
 
 def service_fetcher(service_id: str, browser: ManagedBrowser):
     if service_id == "epos":
-        from src.epos_automation import EposAutoFetcher
+        from src.automation.epos import EposAutoFetcher
 
         return EposAutoFetcher(browser, credentials=service_credentials(service_id))
     if service_id == "commufa":
-        from src.official_site_automation import CommufaAutoFetcher
+        from src.automation.official_sites import CommufaAutoFetcher
 
         return CommufaAutoFetcher(browser, credentials=service_credentials(service_id))
     if service_id == "tokuten":
-        from src.official_site_automation import TokutenAutoFetcher
+        from src.automation.official_sites import TokutenAutoFetcher
 
         return TokutenAutoFetcher(browser, credentials=service_credentials(service_id))
     if service_id == "mobile":
-        from src.official_site_automation import WebBillingAutoFetcher
+        from src.automation.official_sites import WebBillingAutoFetcher
 
         return WebBillingAutoFetcher(browser, credentials=service_credentials(service_id))
     raise KeyError(service_id)
@@ -289,28 +232,28 @@ def render_workspace_header() -> None:
     open_slots = max(len(slots) - done_slots - not_issued_slots, 0)
     current_month = month_label(months[-1]) if months else "-"
 
-    st.title("GetReceipt")
-    st.caption("領収書・明細を取得してGoogle Driveへ保存します。")
-    cols = st.columns(4)
-    cols[0].metric("保存済ファイル", saved_count)
-    cols[1].metric("未取得枠", open_slots)
-    cols[2].metric("保管完了枠", done_slots)
-    cols[3].metric("現在の対象", current_month)
+    ui_styles.render_app_header(
+        saved_count=saved_count,
+        open_slots=open_slots,
+        done_slots=done_slots,
+        current_month=current_month,
+    )
 
 
 def render_section_heading(eyebrow: str, title: str, detail: str) -> None:
-    st.subheader(title)
-    st.caption(f"{eyebrow}: {detail}")
+    ui_styles.render_section_heading(eyebrow, title, detail)
 
 
 def render_dashboard() -> bool:
     render_section_heading("Archive index", TEXT["dashboard"], "未取得からそのまま取得へ進む")
-    service_names = "、".join(service.label for service in SERVICES)
-    st.warning(
-        f"事前準備: Streamlit Cloud Secretsに{service_names}のログイン情報を設定してください。"
-        "未取得を押すと、この画面内の取得フォームに対象月とサービスを反映します。"
-        "ログイン情報は取得用ブラウザへ自動入力されます。"
-    )
+    missing_logins = [service.label for service in SERVICES if not login_secrets_configured(service.id)]
+    if not secrets_configured():
+        st.warning("Google Drive用のSecretsが未設定です。保存と監査を使う前に設定タブで形式を確認してください。")
+    elif missing_logins:
+        st.warning(f"ログインSecrets未設定: {'、'.join(missing_logins)}")
+    else:
+        st.success("Drive保存と全サービスのログインSecretsを確認済みです。")
+    st.caption("未取得を押すと、対象月とサービスを取得フォームへ反映します。")
 
     acquisition_active = bool(st.session_state.get("_acq_active_from_status"))
     if acquisition_active:
@@ -480,8 +423,8 @@ def render_official_auto_acquisition(service_id: str, selected_month: str) -> No
             st.error(f"{service.label}のログインSecretsが未設定です。設定タブの形式でStreamlit Cloud Secretsへ追加してください。")
             return
         status_box = None
-        from src.browser_session import BrowserAutomationError
-        from src.epos_automation import AcquisitionError
+        from src.automation.browser_session import BrowserAutomationError
+        from src.automation.epos import AcquisitionError
 
         browser = automation_browser(service_id)
         fetcher = service_fetcher(service_id, browser)
@@ -491,7 +434,7 @@ def render_official_auto_acquisition(service_id: str, selected_month: str) -> No
                 status.write("ログイン、明細取得、PDF生成を自動で進めます。")
                 statement = fetcher.fetch_pdf(selected_month)
                 status.write("Google Driveへ保存しています。")
-                from src.receipt_pipeline import drive_storage_from_secrets, upload_auto_receipt_to_drive
+                from src.workflows.receipt_pipeline import drive_storage_from_secrets, upload_auto_receipt_to_drive
 
                 storage = drive_storage_from_secrets(st.secrets)
                 saved = upload_auto_receipt_to_drive(
@@ -537,9 +480,6 @@ def render_acquisition_workspace() -> None:
     st.divider()
     if not acquisition_active:
         render_acquisition_form()
-        st.divider()
-    with st.expander("ファイルを追加"):
-        render_manual_upload()
 
 
 def render_manual_upload() -> None:
@@ -592,9 +532,12 @@ def render_manual_upload() -> None:
     )
     preview_name = build_receipt_filename(metadata, preview_extension)
     st.code(preview_name, language="text")
+    drive_ready = secrets_configured()
+    if not drive_ready:
+        st.warning("Google Drive用のSecretsが未設定です。保存する前に設定タブで追加してください。")
 
     cols = st.columns([1, 1, 2])
-    if cols[0].button(TEXT["save_drive"], type="primary", use_container_width=True):
+    if cols[0].button(TEXT["save_drive"], type="primary", use_container_width=True, disabled=not drive_ready):
         if uploaded_file is None:
             st.error("保存するファイルを選択してください。")
             return
@@ -602,7 +545,7 @@ def render_manual_upload() -> None:
             st.error("金額を入力してください。")
             return
         try:
-            from src.receipt_pipeline import drive_storage_from_secrets
+            from src.workflows.receipt_pipeline import drive_storage_from_secrets
 
             content = uploaded_file.getvalue()
             storage = drive_storage_from_secrets(st.secrets)
@@ -632,7 +575,7 @@ def render_manual_upload() -> None:
 
     if cols[1].button(TEXT["mark_not_issued"], use_container_width=True):
         try:
-            from src.receipt_pipeline import drive_storage_from_secrets, record_not_issued_to_drive
+            from src.workflows.receipt_pipeline import drive_storage_from_secrets, record_not_issued_to_drive
 
             storage = drive_storage_from_secrets(st.secrets) if secrets_configured() else None
             record_not_issued_to_drive(
@@ -676,10 +619,11 @@ def render_drive_filename_audit() -> None:
 
     if st.button("フォルダ内のファイル名を確認", type="primary", use_container_width=True):
         try:
-            from src.receipt_pipeline import drive_storage_from_secrets
+            from src.workflows.receipt_pipeline import drive_storage_from_secrets
 
             storage = drive_storage_from_secrets(st.secrets)
-            rows = refresh_drive_filename_audit(storage)
+            rows = refresh_filename_audit(storage, ledger())
+            st.session_state["drive_filename_audit_rows"] = rows
         except Exception as error:
             st.error(f"Driveフォルダの確認に失敗しました: {error}")
             return
@@ -688,15 +632,12 @@ def render_drive_filename_audit() -> None:
     if not rows:
         return
 
-    total = len(rows)
-    ok_count = sum(row["判定"] == "OK" for row in rows)
-    review_count = sum(row["判定"] == "要確認" for row in rows)
-    managed_count = sum(row["判定"] == "管理" for row in rows)
+    summary = audit_summary(rows)
     cols = st.columns(4)
-    cols[0].metric("確認ファイル", total)
-    cols[1].metric("OK", ok_count)
-    cols[2].metric("要確認", review_count)
-    cols[3].metric("管理", managed_count)
+    cols[0].metric("確認ファイル", summary["total"])
+    cols[1].metric("OK", summary["ok"])
+    cols[2].metric("要確認", summary["review"])
+    cols[3].metric("管理", summary["managed"])
 
     display_rows = audit_display_rows(rows)
     st.dataframe(
@@ -715,186 +656,6 @@ def render_drive_filename_audit() -> None:
         mime="text/csv",
         use_container_width=True,
     )
-
-
-def refresh_drive_filename_audit(storage) -> list[dict[str, str]]:
-    files = storage.list_files()
-    ledger_rows = repair_missing_ledger_drive_ids(storage, files, load_synced_ledger_rows(storage))
-    rows = build_drive_filename_audit_rows(files, ledger_rows)
-    st.session_state["drive_filename_audit_rows"] = rows
-    return rows
-
-
-def repair_missing_ledger_drive_ids(
-    storage,
-    files: list[dict[str, str]],
-    ledger_rows: list[dict[str, str]],
-) -> list[dict[str, str]]:
-    rows_by_file_name = {
-        row.get("file_name", ""): row
-        for row in ledger_rows
-        if row.get("file_name") and not row.get("drive_file_id")
-    }
-    changed = False
-    for file in files:
-        name = file.get("name", "")
-        if not name or name == "_receipt_index.csv" or file.get("mimeType") == "application/vnd.google-apps.folder":
-            continue
-        row = rows_by_file_name.get(name)
-        if not row:
-            continue
-        row["drive_file_id"] = file.get("id", "")
-        row["drive_web_view_link"] = file.get("webViewLink", row.get("drive_web_view_link", ""))
-        changed = True
-
-    if changed:
-        ledger().replace_all(ledger_rows)
-        storage.upsert_bytes(
-            file_name="_receipt_index.csv",
-            content=rows_to_csv_bytes(ledger_rows),
-            mime_type="text/csv",
-        )
-    return ledger_rows
-
-
-def load_synced_ledger_rows(storage) -> list[dict[str, str]]:
-    rows_by_drive_id: dict[str, dict[str, str]] = {}
-    rows_without_drive_id: list[dict[str, str]] = []
-
-    def collect(rows: list[dict[str, str]]) -> None:
-        for row in rows:
-            drive_file_id = row.get("drive_file_id", "")
-            if drive_file_id:
-                rows_by_drive_id[drive_file_id] = row
-            else:
-                rows_without_drive_id.append(row)
-
-    collect(ledger().read())
-    drive_content = storage.download_bytes_by_name("_receipt_index.csv")
-    if drive_content:
-        collect(rows_from_csv_bytes(drive_content))
-    return [*rows_by_drive_id.values(), *rows_without_drive_id]
-
-
-def build_drive_filename_audit_rows(
-    files: list[dict[str, str]],
-    ledger_rows: list[dict[str, str]],
-) -> list[dict[str, str]]:
-    ledger_by_drive_id = {
-        row.get("drive_file_id", ""): row
-        for row in ledger_rows
-        if row.get("drive_file_id")
-    }
-    rows: list[dict[str, str]] = []
-    for file in files:
-        name = file.get("name", "")
-        mime_type = file.get("mimeType", "")
-        if mime_type == "application/vnd.google-apps.folder":
-            status = "管理"
-            reason = "フォルダです。"
-            transaction_date = partner_name = amount_yen = extension = ""
-            expected_name = ""
-            ledger_status = "管理"
-            record = {}
-        elif name == "_receipt_index.csv":
-            status = "管理"
-            reason = "保存台帳の同期ファイルです。"
-            transaction_date = partner_name = amount_yen = extension = ""
-            expected_name = ""
-            ledger_status = "管理"
-            record = {}
-        else:
-            extension = normalize_extension(name, "pdf")
-            record = ledger_by_drive_id.get(file.get("id", ""))
-            if record:
-                ledger_status = "登録済"
-                try:
-                    expected_name = expected_filename_from_ledger_record(record, extension)
-                    status = "OK" if name == expected_name else "要確認"
-                    reason = (
-                        "保存台帳のメタデータから生成したファイル名と一致しています。"
-                        if status == "OK"
-                        else "保存台帳のメタデータから生成したファイル名と一致していません。"
-                    )
-                    transaction_date = transaction_date_key_from_record(record)
-                    partner_name = record.get("partner_name", "")
-                    amount_yen = record.get("amount_yen", "")
-                except Exception as error:
-                    status = "要確認"
-                    reason = f"保存台帳のメタデータから期待ファイル名を生成できません: {error}"
-                    transaction_date = record.get("transaction_date", "")
-                    partner_name = record.get("partner_name", "")
-                    amount_yen = record.get("amount_yen", "")
-                    expected_name = ""
-            else:
-                status = "要確認"
-                reason = "保存台帳に未登録です。下のフォームで取引日・取引先・金額を入れると、台帳登録と名前変更を同時に実行できます。"
-                transaction_date = partner_name = amount_yen = ""
-                expected_name = ""
-                ledger_status = "未登録"
-                record = {}
-        rows.append({
-            "ファイルID": file.get("id", ""),
-            "判定": status,
-            "台帳": ledger_status,
-            "ファイル名": name,
-            "期待ファイル名": expected_name,
-            "理由": reason,
-            "取引日": transaction_date,
-            "取引先": partner_name,
-            "金額": amount_yen,
-            "拡張子": extension,
-            "更新日時": file.get("modifiedTime", ""),
-            "Drive": file.get("webViewLink", ""),
-            "サービスID": record.get("service_id", ""),
-            "サービス名": record.get("service_label", ""),
-            "対象月": record.get("target_month", ""),
-            "通貨": record.get("currency", "JPY"),
-            "取得元URL": record.get("source_url", ""),
-            "元ファイル名": record.get("original_file_name", ""),
-        })
-
-    order = {"要確認": 0, "OK": 1, "管理": 2}
-    return sorted(rows, key=lambda row: (order.get(row["判定"], 9), row["ファイル名"]))
-
-
-def expected_filename_from_ledger_record(record: dict[str, str], extension: str) -> str:
-    metadata = ReceiptMetadata(
-        service_id=record.get("service_id", ""),
-        service_label=record.get("service_label", ""),
-        target_month=record.get("target_month", ""),
-        transaction_date=parse_ledger_transaction_date(record.get("transaction_date", "")),
-        partner_name=record.get("partner_name", ""),
-        amount_yen=normalize_amount_yen(record.get("amount_yen", "")),
-        currency=record.get("currency", "JPY") or "JPY",
-        source_url=record.get("source_url", ""),
-        original_file_name=record.get("original_file_name", ""),
-    )
-    return build_receipt_filename(metadata, extension)
-
-
-def transaction_date_key_from_record(record: dict[str, str]) -> str:
-    return parse_ledger_transaction_date(record.get("transaction_date", "")).strftime("%Y%m%d")
-
-
-def parse_ledger_transaction_date(value: str) -> date:
-    text = str(value or "").strip()
-    if re.fullmatch(r"\d{8}", text):
-        return datetime.strptime(text, "%Y%m%d").date()
-    return date.fromisoformat(text)
-
-
-def audit_display_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
-    return [{key: value for key, value in row.items() if key not in HIDDEN_AUDIT_COLUMNS} for row in rows]
-
-
-def audit_rows_to_csv_bytes(rows: list[dict[str, str]]) -> bytes:
-    buffer = StringIO()
-    fieldnames = list(rows[0].keys()) if rows else []
-    writer = csv.DictWriter(buffer, fieldnames=fieldnames)
-    writer.writeheader()
-    writer.writerows(rows)
-    return buffer.getvalue().encode("utf-8-sig")
 
 
 def render_drive_rename_tools(rows: list[dict[str, str]]) -> None:
@@ -984,156 +745,26 @@ def rename_drive_file(
     original_file_name: str,
 ) -> None:
     try:
-        from src.receipt_pipeline import drive_storage_from_secrets
+        from src.workflows.receipt_pipeline import drive_storage_from_secrets
 
         storage = drive_storage_from_secrets(st.secrets)
         storage.rename_file(file_id=file_id, new_name=new_name)
         rename_synced_ledger_file(
             storage,
+            ledger(),
             drive_file_id=file_id,
             file_name=new_name,
             metadata=metadata,
             drive_web_view_link=drive_web_view_link,
             original_file_name=original_file_name,
         )
-        refresh_drive_filename_audit(storage)
+        rows = refresh_filename_audit(storage, ledger())
+        st.session_state["drive_filename_audit_rows"] = rows
     except Exception as error:
         st.error(f"ファイル名の変更に失敗しました: {error}")
         return
     st.session_state["drive_filename_audit_notice"] = "ファイル名を変更し、保存台帳を同期しました。"
     st.rerun()
-
-
-def rename_synced_ledger_file(
-    storage,
-    *,
-    drive_file_id: str,
-    file_name: str,
-    metadata: ReceiptMetadata,
-    drive_web_view_link: str,
-    original_file_name: str,
-) -> bool:
-    rows = load_synced_ledger_rows(storage)
-    metadata_record = metadata.to_record()
-    for row in rows:
-        if row.get("drive_file_id") == drive_file_id:
-            row.update(metadata_record)
-            row["status"] = "uploaded"
-            row["file_name"] = file_name
-            row["drive_web_view_link"] = drive_web_view_link or row.get("drive_web_view_link", "")
-            row["source_url"] = metadata.source_url or row.get("source_url", "")
-            row["original_file_name"] = metadata.original_file_name or original_file_name
-            break
-    else:
-        row = {field: "" for field in CSV_FIELDS}
-        row.update({
-            "uploaded_at": datetime.now(timezone.utc).isoformat(),
-            "status": "uploaded",
-            **metadata_record,
-            "file_name": file_name,
-            "drive_file_id": drive_file_id,
-            "drive_web_view_link": drive_web_view_link,
-            "source_url": metadata.source_url,
-            "original_file_name": metadata.original_file_name or original_file_name,
-        })
-        rows.insert(0, row)
-
-    ledger().replace_all(rows)
-    storage.upsert_bytes(
-        file_name="_receipt_index.csv",
-        content=rows_to_csv_bytes(rows),
-        mime_type="text/csv",
-    )
-    return True
-
-
-def default_rename_date(row: dict[str, str]) -> date:
-    value = row.get("取引日", "")
-    parsed_date = parse_rename_date(value) or parse_rename_file_name(row).get("transaction_date")
-    if parsed_date:
-        return parsed_date
-    return date.today()
-
-
-def default_rename_partner(row: dict[str, str]) -> str:
-    if row.get("取引先"):
-        return row["取引先"]
-    return parse_rename_file_name(row).get("partner_name", "")
-
-
-def default_rename_amount(row: dict[str, str]) -> int:
-    value = row.get("金額", "")
-    if value.isdigit():
-        return int(value)
-    return parse_rename_file_name(row).get("amount_yen", 0)
-
-
-def default_rename_extension(row: dict[str, str]) -> str:
-    return row.get("拡張子") or normalize_extension(row.get("ファイル名"), "pdf")
-
-
-def parse_rename_date(value: str) -> date | None:
-    if not re.fullmatch(r"\d{8}", value or ""):
-        return None
-    try:
-        return datetime.strptime(value, "%Y%m%d").date()
-    except ValueError:
-        return None
-
-
-def parse_rename_file_name(row: dict[str, str]) -> dict[str, object]:
-    match = re.fullmatch(
-        r"(?P<date>\d{8})_(?P<partner>.+)_(?P<amount>\d+)円\.[a-z0-9]+",
-        row.get("ファイル名", ""),
-    )
-    if not match:
-        return {}
-    transaction_date = parse_rename_date(match.group("date"))
-    if not transaction_date:
-        return {}
-    return {
-        "transaction_date": transaction_date,
-        "partner_name": match.group("partner"),
-        "amount_yen": int(match.group("amount")),
-    }
-
-
-def build_rename_metadata(
-    *,
-    row: dict[str, str],
-    transaction_date: date,
-    partner_name: str,
-    amount_yen: int,
-) -> ReceiptMetadata:
-    return ReceiptMetadata(
-        service_id=row.get("サービスID", ""),
-        service_label=row.get("サービス名", ""),
-        target_month=row.get("対象月") or transaction_date.strftime("%Y-%m"),
-        transaction_date=transaction_date,
-        partner_name=partner_name,
-        amount_yen=normalize_amount_yen(amount_yen),
-        currency=row.get("通貨", "JPY") or "JPY",
-        source_url=row.get("取得元URL") or row.get("Drive", ""),
-        original_file_name=row.get("元ファイル名") or row.get("ファイル名", ""),
-    )
-
-
-def build_rename_preview_name(
-    *,
-    transaction_date: date,
-    partner_name: str,
-    amount_yen: int,
-    extension: str,
-) -> str:
-    metadata = ReceiptMetadata(
-        service_id="",
-        service_label="",
-        target_month="",
-        transaction_date=transaction_date,
-        partner_name=partner_name,
-        amount_yen=amount_yen,
-    )
-    return build_receipt_filename(metadata, extension)
 
 
 def render_settings() -> None:
@@ -1190,12 +821,20 @@ def _mime_type(extension: str) -> str:
 inject_design()
 render_workspace_header()
 
-tabs = st.tabs([TEXT["dashboard"]])
+tabs = st.tabs([
+    TEXT["dashboard"],
+    TEXT["manual_upload"],
+    TEXT["filename_audit"],
+    TEXT["ledger"],
+    TEXT["settings"],
+])
 with tabs[0]:
     render_acquisition_workspace()
-    with st.expander("ファイル名チェック"):
-        render_drive_filename_audit()
-    with st.expander(TEXT["ledger"]):
-        render_history()
-    with st.expander(TEXT["settings"]):
-        render_settings()
+with tabs[1]:
+    render_manual_upload()
+with tabs[2]:
+    render_drive_filename_audit()
+with tabs[3]:
+    render_history()
+with tabs[4]:
+    render_settings()
