@@ -245,7 +245,7 @@ def render_section_heading(eyebrow: str, title: str, detail: str) -> None:
 
 
 def render_dashboard() -> bool:
-    render_section_heading("Archive index", TEXT["dashboard"], "未取得からそのまま取得へ進む")
+    render_section_heading("一覧", TEXT["dashboard"], "未取得を押すと取得へ進みます")
     missing_logins = [service.label for service in SERVICES if not login_secrets_configured(service.id)]
     if not secrets_configured():
         st.warning("Google Drive用のSecretsが未設定です。保存と監査を使う前に設定タブで形式を確認してください。")
@@ -336,7 +336,7 @@ def prime_manual_defaults(service_id: str, target_month: str, *, force: bool = F
 
 
 def render_acquisition_form() -> None:
-    render_section_heading("Acquire", "取得", "サービスと対象月を選択")
+    render_section_heading("取得", "取得操作", "ログイン確認とDrive保存")
     months = selectable_months()
     service_ids = [service.id for service in SERVICES]
     st.session_state.setdefault("acq_service", service_ids[0])
@@ -490,7 +490,7 @@ def render_acquisition_workspace() -> None:
 
 
 def render_manual_upload() -> None:
-    render_section_heading("Intake", "ファイルを保管", "iPhoneのファイルをGoogle Driveへ保存")
+    render_section_heading("追加", "ファイルを保管", "PDF/CSV/画像をDriveへ保存")
 
     months = selectable_months()
     service_ids = [service.id for service in SERVICES]
@@ -598,7 +598,7 @@ def render_manual_upload() -> None:
 
 
 def render_history() -> None:
-    render_section_heading("Ledger", TEXT["ledger"], "保存済みの領収書・明細")
+    render_section_heading("台帳", TEXT["ledger"], "保存済みの領収書・明細")
     records = ledger().read()
     if not records:
         st.info("まだ保存履歴はありません。")
@@ -613,7 +613,7 @@ def render_history() -> None:
 
 
 def render_drive_filename_audit() -> None:
-    render_section_heading("Drive folder", "ファイル名チェック", "保存先フォルダ内の全ファイルを確認")
+    render_section_heading("整理", "ファイル名チェック", "保存先フォルダ内の全ファイルを確認")
     st.code("YYYYMMDD_取引先_金額円.拡張子\n例: 20260701_株式会社NTTドコモ_8250円.pdf", language="text")
     st.caption("YYYYMMDDは取引日 / 発行日です。保存台帳のメタデータから取得本体と同じ生成関数で照合します。")
     if not secrets_configured():
@@ -775,7 +775,7 @@ def rename_drive_file(
 
 
 def render_settings() -> None:
-    render_section_heading("Connection", TEXT["settings"], "Google Driveとの連携状態")
+    render_section_heading("接続", TEXT["settings"], "Google Driveとの連携状態")
     st.write("Google Drive保存先")
     st.code(RECEIPT_DRIVE_FOLDER_ID, language="text")
     st.link_button("領収書フォルダを開く", RECEIPT_DRIVE_FOLDER_URL)
