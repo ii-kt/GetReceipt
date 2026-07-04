@@ -278,20 +278,27 @@ def render_dashboard() -> bool:
         unsafe_allow_html=True,
     )
 
-    header_cols = st.columns([1.35, 1, 1, 1, 1])
-    header_cols[0].markdown(f"**{TEXT['target_month']}**")
-    for index, service in enumerate(SERVICES, start=1):
-        header_cols[index].markdown(f"**{service.label}**")
-
     for target_month in months:
-        row = st.columns([1.35, 1, 1, 1, 1])
-        row[0].markdown(f'<div class="gr-month-cell">{month_label(target_month)}</div>', unsafe_allow_html=True)
-        for index, service in enumerate(SERVICES, start=1):
+        st.markdown(
+            f'<div class="gr-month-band">{month_label(target_month)}</div>',
+            unsafe_allow_html=True,
+        )
+        for service in SERVICES:
             record = latest.get((target_month, service.id))
             label = status_text(record)
             is_unfetched = label == TEXT["unfetched"]
             button_type = "primary" if is_unfetched else "secondary"
-            if row[index].button(
+            cols = st.columns([1.05, 1])
+            cols[0].markdown(
+                f"""
+                <div class="gr-service-cell">
+                  <span>{service.label}</span>
+                  <small>{month_label(target_month)}</small>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            if cols[1].button(
                 label,
                 key=f"run:{target_month}:{service.id}",
                 type=button_type,

@@ -243,6 +243,39 @@ def inject_design() -> None:
           font-weight: 800;
         }
 
+        .gr-month-band {
+          margin: .95rem 0 .45rem;
+          padding: .55rem .72rem;
+          border: 1px solid var(--gr-border);
+          border-left: 5px solid var(--gr-accent);
+          border-radius: var(--gr-radius);
+          background: var(--gr-surface);
+          color: var(--gr-ink);
+          font-size: .92rem;
+          font-weight: 850;
+        }
+
+        .gr-service-cell {
+          display: grid;
+          align-content: center;
+          min-height: 40px;
+          padding: .18rem 0 .48rem;
+        }
+
+        .gr-service-cell span {
+          color: var(--gr-ink);
+          font-size: .9rem;
+          font-weight: 820;
+          line-height: 1.25;
+        }
+
+        .gr-service-cell small {
+          margin-top: .12rem;
+          color: var(--gr-muted);
+          font-size: .7rem;
+          font-weight: 700;
+        }
+
         .stButton > button,
         .stDownloadButton > button,
         [data-testid="stLinkButton"] > a {
