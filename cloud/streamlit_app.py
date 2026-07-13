@@ -1,842 +1,368 @@
 from __future__ import annotations
 
-import os
-import subprocess
-
-
-def cleanup_orphan_acquisition_browsers() -> None:
-    if os.name != "posix":
-        return
-    for pattern in (
-        "chromium.*--remote-debugging-port",
-        "chrome.*--remote-debugging-port",
-    ):
-        try:
-            subprocess.run(["pkill", "-f", pattern], timeout=2, check=False)
-        except Exception:
-            pass
-
-
-cleanup_orphan_acquisition_browsers()
+import logging
+import shutil
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+from zoneinfo import ZoneInfo
 
 import streamlit as st
 
-from src.domain.ledger import ReceiptLedger
-from src.domain.naming import (
-    ReceiptMetadata,
-    build_receipt_filename,
-    normalize_amount_yen,
-    normalize_extension,
-    sha256_bytes,
-)
-from src.ui import styles as ui_styles
-from src.workflows.acquisition import acquisition_guidance, default_transaction_date
-from src.workflows.filename_audit import (
-    audit_display_rows,
-    audit_rows_to_csv_bytes,
-    audit_summary,
-    build_rename_metadata,
-    build_rename_preview_name,
-    default_rename_amount,
-    default_rename_date,
-    default_rename_extension,
-    default_rename_partner,
-    refresh_drive_filename_audit as refresh_filename_audit,
-    rename_synced_ledger_file,
-)
+from src.automation.browser_session import ManagedBrowser
+from src.automation.credentials import credentials_configured, service_credentials
+from src.automation.providers import build_receipt_fetcher
 from src.config import (
     DATA_DIR,
-    LEDGER_PATH,
-    RECEIPT_DRIVE_FOLDER_ID,
     RECEIPT_DRIVE_FOLDER_URL,
     SERVICES,
     month_label,
     selectable_months,
     service_by_id,
 )
+from src.storage.drive_storage import DriveStorage
+from src.ui import styles as ui_styles
+from src.workflows.auto_acquisition import run_auto_acquisition
+from src.workflows.drive_status import StoredReceipt, find_receipt
+
+
+TOKYO = ZoneInfo("Asia/Tokyo")
+BATCH_KEY = "getreceipt_batch"
+FAILURE_KEY = "getreceipt_failure"
+NOTICE_KEY = "getreceipt_notice"
+LOGGER = logging.getLogger(__name__)
+
 
 st.set_page_config(
     page_title="GetReceipt",
-    layout="wide",
+    page_icon=":material/receipt_long:",
+    layout="centered",
+    initial_sidebar_state="collapsed",
 )
 
 
-TEXT = {
-    "dashboard": "取得状況",
-    "manual_upload": "ファイル追加",
-    "filename_audit": "ファイル名監査",
-    "ledger": "保存台帳",
-    "settings": "設定",
-    "target_month": "対象月",
-    "service": "サービス",
-    "unfetched": "未取得",
-    "uploaded": "取得済",
-    "not_issued": "未発行",
-    "save_drive": "Driveへ保存",
-    "mark_not_issued": "未発行として記録",
-}
-
-
-def inject_design() -> None:
-    ui_styles.inject_design()
-
-
-def ledger() -> ReceiptLedger:
-    return ReceiptLedger(LEDGER_PATH)
-
-
-def secrets_configured() -> bool:
+def drive_secrets_configured() -> bool:
     try:
         return "google_service_account" in st.secrets
     except Exception:
         return False
 
 
-CREDENTIAL_SECTIONS: dict[str, tuple[str, ...]] = {
-    "epos": ("epos",),
-    "commufa": ("commufa",),
-    "tokuten": ("tokuten", "outlook", "microsoft"),
-    "mobile": ("webbilling", "mobile", "d_account"),
-}
-
-LOGIN_ID_KEYS = (
-    "login_id",
-    "loginId",
-    "user_id",
-    "userId",
-    "username",
-    "email",
-    "mail",
-    "account",
-    "account_id",
-    "d_account_id",
-    "dAccountId",
-    "id",
-)
-PASSWORD_KEYS = ("password", "pass")
+def current_sync_label() -> str:
+    return f"Drive確認 {datetime.now(TOKYO):%H:%M}"
 
 
-def secret_value(section: object, keys: tuple[str, ...]) -> str:
-    for key in keys:
-        try:
-            value = section.get(key)  # type: ignore[attr-defined]
-        except Exception:
-            value = None
-        if value:
-            return str(value).strip()
-    return ""
-
-
-def service_credentials(service_id: str) -> dict[str, str]:
+def load_drive_snapshot() -> tuple[DriveStorage | None, list[dict[str, str]], str]:
+    if not drive_secrets_configured():
+        return None, [], "Google Driveの接続情報がStreamlit Secretsにありません。"
     try:
-        for section_name in CREDENTIAL_SECTIONS.get(service_id, (service_id,)):
-            if section_name not in st.secrets:
-                continue
-            section = st.secrets[section_name]
-            login_id = secret_value(section, LOGIN_ID_KEYS)
-            password = secret_value(section, PASSWORD_KEYS)
-            return {
-                "login_id": login_id,
-                "id": login_id,
-                "email": login_id,
-                "dAccountId": login_id,
-                "password": password,
-            }
-    except Exception:
-        pass
-    return {}
-
-
-def login_secrets_configured(service_id: str) -> bool:
-    credentials = service_credentials(service_id)
-    return bool(credentials.get("login_id") and credentials.get("password"))
-
-
-def automation_browser(service_id: str) -> ManagedBrowser:
-    from src.automation.browser_session import ManagedBrowser
-
-    browser_key = f"_automation_browser_{service_id}"
-    browser = st.session_state.get(browser_key)
-    if browser is None:
-        browser = ManagedBrowser(
-            profile_dir=DATA_DIR / f"browser-profile-{service_id}",
-            download_dir=DATA_DIR / f"browser-downloads-{service_id}",
-        )
-        st.session_state[browser_key] = browser
-    return browser
-
-
-def browser_image_key(service_id: str) -> str:
-    return f"browser_image_{service_id}"
-
-
-def update_browser_image(service_id: str, browser: ManagedBrowser) -> None:
-    st.session_state[browser_image_key(service_id)] = browser.screenshot()
-
-
-def release_automation_browser(service_id: str, browser: ManagedBrowser, *, clear_profile: bool = True) -> None:
-    try:
-        browser.close(clear_profile=clear_profile)
-    finally:
-        st.session_state.pop(f"_automation_browser_{service_id}", None)
-
-
-def service_fetcher(service_id: str, browser: ManagedBrowser):
-    if service_id == "epos":
-        from src.automation.epos import EposAutoFetcher
-
-        return EposAutoFetcher(browser, credentials=service_credentials(service_id))
-    if service_id == "commufa":
-        from src.automation.official_sites import CommufaAutoFetcher
-
-        return CommufaAutoFetcher(browser, credentials=service_credentials(service_id))
-    if service_id == "tokuten":
-        from src.automation.official_sites import TokutenAutoFetcher
-
-        return TokutenAutoFetcher(browser, credentials=service_credentials(service_id))
-    if service_id == "mobile":
-        from src.automation.official_sites import WebBillingAutoFetcher
-
-        return WebBillingAutoFetcher(browser, credentials=service_credentials(service_id))
-    raise KeyError(service_id)
-
-
-def run_auto_receipt_acquisition(service_id: str, selected_month: str) -> dict[str, str] | None:
-    service = service_by_id(service_id)
-    if not secrets_configured():
-        st.error("Google Drive用のSecretsが未設定です。先に設定してください。")
-        return None
-    if not login_secrets_configured(service_id):
-        st.error(f"{service.label}のログインSecretsが未設定です。設定タブの形式でStreamlit Cloud Secretsへ追加してください。")
-        return None
-
-    from src.automation.browser_session import BrowserAutomationError
-    from src.automation.epos import AcquisitionError
-    from src.workflows.receipt_pipeline import drive_storage_from_secrets, upload_auto_receipt_to_drive
-
-    status_box = st.status(f"{service.label} / {month_label(selected_month)} の自動取得を開始しています。", expanded=True)
-    browser = automation_browser(service_id)
-    try:
-        with status_box as status:
-            status.write("Streamlit Cloud内の取得用Chromiumを起動します。iPhone側に別画面は開きません。")
-            status.write("Secretsのログイン情報でログインし、対象明細を取得します。")
-            fetcher = service_fetcher(service_id, browser)
-            statement = fetcher.fetch_pdf(selected_month)
-            status.write(f"PDF取得完了: {len(statement.content):,} bytes")
-            status.write("Google Driveへ保存し、保存台帳を同期します。")
-            storage = drive_storage_from_secrets(st.secrets)
-            saved = upload_auto_receipt_to_drive(
-                service_id=service_id,
-                target_month=selected_month,
-                content=statement.content,
-                original_file_name=statement.original_file_name,
-                source_url=statement.source_url,
-                metadata_text=statement.metadata_text,
-                storage=storage,
-                ledger=ledger(),
-            )
-            status.update(label=f"{service.label} / {month_label(selected_month)} の取得とDrive保存が完了しました。", state="complete")
-    except AcquisitionError as error:
-        status_box.update(label=f"{service.label} / {month_label(selected_month)} の取得に失敗しました。", state="error")
-        st.warning(str(error))
-        st.caption(f"エラーコード: {error.code}")
-        if error.advice:
-            st.info(error.advice)
-        show_browser_failure_snapshot(service_id, browser)
-        release_automation_browser(service_id, browser, clear_profile=False)
-        return None
-    except (BrowserAutomationError, Exception) as error:
-        status_box.update(label=f"{service.label} / {month_label(selected_month)} の取得に失敗しました。", state="error")
-        st.error(f"取得に失敗しました: {error}")
-        show_browser_failure_snapshot(service_id, browser)
-        release_automation_browser(service_id, browser, clear_profile=False)
-        return None
-
-    st.success("PDFを取得し、Google Driveへ保存しました。")
-    for line in statement.logs:
-        st.caption(line)
-    if saved.get("drive_web_view_link"):
-        st.link_button("Driveで開く", saved["drive_web_view_link"])
-    release_automation_browser(service_id, browser)
-    return saved
-
-
-def show_browser_failure_snapshot(service_id: str, browser: ManagedBrowser) -> None:
-    try:
-        update_browser_image(service_id, browser)
-    except Exception as snapshot_error:
-        st.caption(f"取得用ブラウザのスクリーンショット取得にも失敗しました: {snapshot_error}")
-        return
-    image_bytes = st.session_state.get(browser_image_key(service_id))
-    if image_bytes:
-        st.image(image_bytes, caption="停止時点の取得用ブラウザ")
-
-
-def latest_status_by_month(records: list[dict[str, str]]) -> dict[tuple[str, str], dict[str, str]]:
-    latest: dict[tuple[str, str], dict[str, str]] = {}
-    for record in records:
-        key = (record.get("target_month", ""), record.get("service_id", ""))
-        if key not in latest:
-            latest[key] = record
-    return latest
-
-
-def status_text(record: dict[str, str] | None) -> str:
-    if not record:
-        return TEXT["unfetched"]
-    if record.get("status") == "uploaded":
-        return TEXT["uploaded"]
-    if record.get("status") == "not_issued":
-        return TEXT["not_issued"]
-    return TEXT["unfetched"]
-
-
-def render_workspace_header() -> None:
-    records = ledger().read()
-    latest = latest_status_by_month(records)
-    months = selectable_months()
-    slots = [(target_month, service.id) for target_month in months for service in SERVICES]
-    slot_records = [latest.get(slot) for slot in slots]
-    saved_count = sum(record.get("status") == "uploaded" for record in records)
-    done_slots = sum(record is not None and record.get("status") == "uploaded" for record in slot_records)
-    not_issued_slots = sum(record is not None and record.get("status") == "not_issued" for record in slot_records)
-    open_slots = max(len(slots) - done_slots - not_issued_slots, 0)
-    current_month = month_label(months[-1]) if months else "-"
-
-    ui_styles.render_app_header(
-        saved_count=saved_count,
-        open_slots=open_slots,
-        done_slots=done_slots,
-        current_month=current_month,
-    )
-
-
-def render_section_heading(eyebrow: str, title: str, detail: str) -> None:
-    ui_styles.render_section_heading(eyebrow, title, detail)
-
-
-def render_dashboard() -> bool:
-    render_section_heading("一覧", TEXT["dashboard"], "未取得を押すと取得へ進みます")
-    missing_logins = [service.label for service in SERVICES if not login_secrets_configured(service.id)]
-    if not secrets_configured():
-        st.warning("Google Drive用のSecretsが未設定です。保存と監査を使う前に設定タブで形式を確認してください。")
-    elif missing_logins:
-        st.warning(f"ログインSecrets未設定: {'、'.join(missing_logins)}")
-    else:
-        st.success("Drive保存と全サービスのログインSecretsを確認済みです。")
-    st.caption("未取得を押すと、その対象をログインからDrive保存まで自動取得します。")
-
-    acquisition_active = bool(st.session_state.get("_acq_active_from_status"))
-    if acquisition_active:
-        notice = st.session_state.pop("_acq_status_notice", "")
-        if notice:
-            st.success(notice)
-        render_acquisition_form()
-        st.divider()
-
-    records = ledger().read()
-    latest = latest_status_by_month(records)
-    months = list(reversed(selectable_months()))
-
-    st.markdown(
-        """
-        <div class="gr-status-key" aria-label="保管状態の凡例">
-          <span class="is-open"><i></i>未取得: クリックして取得へ</span>
-          <span class="is-done"><i></i>取得済: 保管済み</span>
-          <span class="is-none"><i></i>未発行: 記録済み</span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    for target_month in months:
-        st.markdown(
-            f'<div class="gr-month-band">{month_label(target_month)}</div>',
-            unsafe_allow_html=True,
-        )
-        for service in SERVICES:
-            record = latest.get((target_month, service.id))
-            label = status_text(record)
-            is_unfetched = label == TEXT["unfetched"]
-            button_type = "primary" if is_unfetched else "secondary"
-            cols = st.columns([1.05, 1])
-            cols[0].markdown(
-                f"""
-                <div class="gr-service-cell">
-                  <span>{service.label}</span>
-                  <small>{month_label(target_month)}</small>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            if cols[1].button(
-                label,
-                key=f"run:{target_month}:{service.id}",
-                type=button_type,
-                disabled=not is_unfetched,
-                use_container_width=True,
-            ):
-                select_for_acquisition(service.id, target_month)
-                run_auto_receipt_acquisition(service.id, target_month)
-                st.stop()
-
-    return acquisition_active
-
-
-def select_for_acquisition(service_id: str, target_month: str) -> None:
-    st.session_state["acq_service"] = service_id
-    st.session_state["acq_month"] = target_month
-    prime_manual_defaults(service_id, target_month, force=True)
-
-
-def prime_manual_defaults(service_id: str, target_month: str, *, force: bool = False) -> None:
-    defaults_key = f"{service_id}:{target_month}"
-    if not force and st.session_state.get("_manual_defaults_key") == defaults_key:
-        return
-
-    service = service_by_id(service_id)
-    st.session_state["manual_service"] = service_id
-    st.session_state["manual_month"] = target_month
-    st.session_state["manual_transaction_date"] = default_transaction_date(service_id, target_month)
-    st.session_state["manual_source_url"] = service.portal_url
-    st.session_state["_manual_defaults_key"] = defaults_key
-
-
-def render_acquisition_form() -> None:
-    render_section_heading("取得", "取得操作", "ログイン確認とDrive保存")
-    months = selectable_months()
-    service_ids = [service.id for service in SERVICES]
-    st.session_state.setdefault("acq_service", service_ids[0])
-    st.session_state.setdefault("acq_month", months[-1])
-    selected_service = st.selectbox(
-        TEXT["service"],
-        service_ids,
-        format_func=lambda value: service_by_id(value).label,
-        key="acq_service",
-    )
-    selected_month = st.selectbox(
-        TEXT["target_month"],
-        months,
-        format_func=month_label,
-        key="acq_month",
-    )
-    service = service_by_id(selected_service)
-    prime_manual_defaults(selected_service, selected_month)
-    guidance = acquisition_guidance(selected_service, selected_month)
-
-    st.info(
-        f"{service.label}のログイン情報はStreamlit Secretsから読み込み、取得用ブラウザへ自動入力します。"
-        "Secrets未設定のサービスは取得前に停止します。"
-    )
-    st.markdown(f"**{guidance.heading}**")
-    st.code(guidance.target_hint, language="text")
-    for step in guidance.steps:
-        st.write(f"- {step}")
-    st.info(guidance.note)
-
-    render_official_auto_acquisition(selected_service, selected_month)
-
-
-def render_official_auto_acquisition(service_id: str, selected_month: str) -> None:
-    st.markdown("**自動取得**")
-    service = service_by_id(service_id)
-    image_key = browser_image_key(service_id)
-
-    st.caption("iPhoneに別ウィンドウは開かず、Streamlit Cloud内の取得用ブラウザでログインからDrive保存まで実行します。")
-    if st.button(
-        "自動ログイン・PDF取得・Drive保存",
-        key=f"fetch_pdf:{service_id}",
-        type="primary",
-        use_container_width=True,
-    ):
-        run_auto_receipt_acquisition(service_id, selected_month)
-
-    controls = st.columns([1, 1])
-    if controls[0].button("停止時点の画面を更新", key=f"refresh_browser:{service_id}", use_container_width=True):
-        try:
-            browser = st.session_state.get(f"_automation_browser_{service_id}")
-            if browser is None:
-                st.info("現在表示できる取得用ブラウザはありません。")
-            else:
-                update_browser_image(service_id, browser)
-        except Exception as error:
-            st.error(f"画面更新に失敗しました: {error}")
-
-    if controls[1].button("取得セッション終了", key=f"close_browser:{service_id}", use_container_width=True):
-        try:
-            browser = st.session_state.get(f"_automation_browser_{service_id}")
-            if browser is not None:
-                release_automation_browser(service_id, browser)
-            st.session_state.pop(image_key, None)
-            st.success("取得用ブラウザのセッションを終了しました。")
-        except Exception as error:
-            st.error(f"セッション終了に失敗しました: {error}")
-
-    image_bytes = st.session_state.get(image_key)
-    if image_bytes:
-        st.image(image_bytes)
-
-
-def render_acquisition_workspace() -> None:
-    acquisition_active = render_dashboard()
-    st.divider()
-    if not acquisition_active:
-        render_acquisition_form()
-
-
-def render_manual_upload() -> None:
-    render_section_heading("追加", "ファイルを保管", "PDF/CSV/画像をDriveへ保存")
-
-    months = selectable_months()
-    service_ids = [service.id for service in SERVICES]
-    st.session_state.setdefault("manual_service", st.session_state.get("acq_service", service_ids[0]))
-    st.session_state.setdefault("manual_month", st.session_state.get("acq_month", months[-1]))
-    st.session_state.setdefault(
-        "manual_transaction_date",
-        default_transaction_date(st.session_state["manual_service"], st.session_state["manual_month"]),
-    )
-    st.session_state.setdefault(
-        "manual_source_url",
-        service_by_id(st.session_state["manual_service"]).portal_url,
-    )
-    left, right = st.columns(2)
-    with left:
-        service_id = st.selectbox(
-            TEXT["service"],
-            service_ids,
-            format_func=lambda value: service_by_id(value).label,
-            key="manual_service",
-        )
-        target_month = st.selectbox(
-            TEXT["target_month"],
-            months,
-            format_func=month_label,
-            key="manual_month",
-        )
-        transaction_date = st.date_input("取引日 / 発行日", key="manual_transaction_date")
-    with right:
-        service = service_by_id(service_id)
-        partner_name = st.text_input("取引先", value=service.default_partner)
-        amount_yen = st.number_input("金額（円）", min_value=0, step=1, value=0)
-        source_url = st.text_input("取得元URL", key="manual_source_url")
-
-    uploaded_file = st.file_uploader("保存するPDF/CSV/画像", type=["pdf", "csv", "png", "jpg", "jpeg"])
-    preview_extension = normalize_extension(uploaded_file.name if uploaded_file else None)
-    metadata = ReceiptMetadata(
-        service_id=service_id,
-        service_label=service_by_id(service_id).label,
-        target_month=target_month,
-        transaction_date=transaction_date,
-        partner_name=partner_name,
-        amount_yen=normalize_amount_yen(amount_yen),
-        source_url=source_url,
-        original_file_name=uploaded_file.name if uploaded_file else "",
-    )
-    preview_name = build_receipt_filename(metadata, preview_extension)
-    st.code(preview_name, language="text")
-    drive_ready = secrets_configured()
-    if not drive_ready:
-        st.warning("Google Drive用のSecretsが未設定です。保存する前に設定タブで追加してください。")
-
-    cols = st.columns([1, 1, 2])
-    if cols[0].button(TEXT["save_drive"], type="primary", use_container_width=True, disabled=not drive_ready):
-        if uploaded_file is None:
-            st.error("保存するファイルを選択してください。")
-            return
-        if amount_yen <= 0:
-            st.error("金額を入力してください。")
-            return
-        try:
-            from src.workflows.receipt_pipeline import drive_storage_from_secrets
-
-            content = uploaded_file.getvalue()
-            storage = drive_storage_from_secrets(st.secrets)
-            result = storage.upload_bytes(
-                file_name=preview_name,
-                content=content,
-                mime_type=_mime_type(preview_extension),
-            )
-            saved = ledger().append_upload(
-                metadata=metadata,
-                file_name=preview_name,
-                drive_file_id=result.id,
-                drive_web_view_link=result.web_view_link,
-                sha256=sha256_bytes(content),
-            )
-            storage.upsert_bytes(
-                file_name="_receipt_index.csv",
-                content=ledger().to_csv_bytes(),
-                mime_type="text/csv",
-            )
-        except Exception as error:
-            st.error(f"Google Driveへの保存に失敗しました: {error}")
-            return
-        st.success("Google Driveへ保存しました。")
-        if saved.get("drive_web_view_link"):
-            st.link_button("Driveで開く", saved["drive_web_view_link"])
-
-    if cols[1].button(TEXT["mark_not_issued"], use_container_width=True):
-        try:
-            from src.workflows.receipt_pipeline import drive_storage_from_secrets, record_not_issued_to_drive
-
-            storage = drive_storage_from_secrets(st.secrets) if secrets_configured() else None
-            record_not_issued_to_drive(
-                service_id=service_id,
-                target_month=target_month,
-                storage=storage,
-                ledger=ledger(),
-            )
-        except Exception as error:
-            st.error(f"記録に失敗しました: {error}")
-            return
-        st.success("未発行として記録しました。")
-
-
-def render_history() -> None:
-    render_section_heading("台帳", TEXT["ledger"], "保存済みの領収書・明細")
-    records = ledger().read()
-    if not records:
-        st.info("まだ保存履歴はありません。")
-        return
-    st.dataframe(records, use_container_width=True, hide_index=True)
-    st.download_button(
-        "台帳CSVをダウンロード",
-        data=ledger().to_csv_bytes(),
-        file_name="receipt_index.csv",
-        mime="text/csv",
-    )
-
-
-def render_drive_filename_audit() -> None:
-    render_section_heading("整理", "ファイル名チェック", "保存先フォルダ内の全ファイルを確認")
-    st.code("YYYYMMDD_取引先_金額円.拡張子\n例: 20260701_株式会社NTTドコモ_8250円.pdf", language="text")
-    st.caption("YYYYMMDDは取引日 / 発行日です。保存台帳のメタデータから取得本体と同じ生成関数で照合します。")
-    if not secrets_configured():
-        st.warning("Google Drive用のSecretsが未設定です。")
-        return
-
-    notice = st.session_state.pop("drive_filename_audit_notice", "")
-    if notice:
-        st.success(notice)
-
-    if st.button("フォルダ内のファイル名を確認", type="primary", use_container_width=True):
-        try:
-            from src.workflows.receipt_pipeline import drive_storage_from_secrets
-
-            storage = drive_storage_from_secrets(st.secrets)
-            rows = refresh_filename_audit(storage, ledger())
-            st.session_state["drive_filename_audit_rows"] = rows
-        except Exception as error:
-            st.error(f"Driveフォルダの確認に失敗しました: {error}")
-            return
-
-    rows = st.session_state.get("drive_filename_audit_rows", [])
-    if not rows:
-        return
-
-    summary = audit_summary(rows)
-    cols = st.columns(4)
-    cols[0].metric("確認ファイル", summary["total"])
-    cols[1].metric("OK", summary["ok"])
-    cols[2].metric("要確認", summary["review"])
-    cols[3].metric("管理", summary["managed"])
-
-    display_rows = audit_display_rows(rows)
-    st.dataframe(
-        display_rows,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Drive": st.column_config.LinkColumn("Drive"),
-        },
-    )
-    render_drive_rename_tools(rows)
-    st.download_button(
-        "確認結果CSVをダウンロード",
-        data=audit_rows_to_csv_bytes(display_rows),
-        file_name="drive_filename_audit.csv",
-        mime="text/csv",
-        use_container_width=True,
-    )
-
-
-def render_drive_rename_tools(rows: list[dict[str, str]]) -> None:
-    targets = [row for row in rows if row.get("判定") == "要確認" and row.get("ファイルID")]
-    if not targets:
-        return
-
-    st.divider()
-    st.markdown("**ファイル名を変更**")
-    existing_names = {row.get("ファイル名", ""): row.get("ファイルID", "") for row in rows}
-
-    for row in targets:
-        file_id = row["ファイルID"]
-        current_name = row["ファイル名"]
-        with st.expander(current_name):
-            if row.get("Drive"):
-                st.link_button("Driveで開く", row["Drive"])
-
-            transaction_date = st.date_input(
-                "取引日",
-                value=default_rename_date(row),
-                key=f"rename_date:{file_id}",
-            )
-            partner_name = st.text_input(
-                "取引先",
-                value=default_rename_partner(row),
-                key=f"rename_partner:{file_id}",
-            )
-            amount_yen = st.number_input(
-                "金額（円）",
-                min_value=0,
-                step=1,
-                value=default_rename_amount(row),
-                key=f"rename_amount:{file_id}",
-            )
-            extension = st.text_input(
-                "拡張子",
-                value=default_rename_extension(row),
-                key=f"rename_extension:{file_id}",
-            )
-
-            preview_name = build_rename_preview_name(
-                transaction_date=transaction_date,
-                partner_name=partner_name,
-                amount_yen=int(amount_yen),
-                extension=extension,
-            )
-            metadata = build_rename_metadata(
-                row=row,
-                transaction_date=transaction_date,
-                partner_name=partner_name,
-                amount_yen=int(amount_yen),
-            )
-            duplicate_id = existing_names.get(preview_name)
-            has_duplicate = bool(duplicate_id and duplicate_id != file_id)
-            missing_partner = not partner_name.strip()
-            st.code(preview_name, language="text")
-            if has_duplicate:
-                st.error("同じ名前のファイルが既にあります。")
-            if amount_yen <= 0:
-                st.warning("金額を入力してください。")
-            if missing_partner:
-                st.warning("取引先を入力してください。")
-
-            if st.button(
-                "この名前に変更して台帳登録" if row.get("台帳") == "未登録" else "この名前に変更",
-                key=f"rename_apply:{file_id}",
-                type="primary",
-                use_container_width=True,
-                disabled=has_duplicate or amount_yen <= 0 or missing_partner,
-            ):
-                rename_drive_file(
-                    file_id=file_id,
-                    new_name=preview_name,
-                    metadata=metadata,
-                    drive_web_view_link=row.get("Drive", ""),
-                    original_file_name=current_name,
-                )
-
-
-def rename_drive_file(
-    *,
-    file_id: str,
-    new_name: str,
-    metadata: ReceiptMetadata,
-    drive_web_view_link: str,
-    original_file_name: str,
-) -> None:
-    try:
-        from src.workflows.receipt_pipeline import drive_storage_from_secrets
-
-        storage = drive_storage_from_secrets(st.secrets)
-        storage.rename_file(file_id=file_id, new_name=new_name)
-        rename_synced_ledger_file(
-            storage,
-            ledger(),
-            drive_file_id=file_id,
-            file_name=new_name,
-            metadata=metadata,
-            drive_web_view_link=drive_web_view_link,
-            original_file_name=original_file_name,
-        )
-        rows = refresh_filename_audit(storage, ledger())
-        st.session_state["drive_filename_audit_rows"] = rows
+        storage = DriveStorage.from_secrets(st.secrets)
+        return storage, storage.list_files(), ""
     except Exception as error:
-        st.error(f"ファイル名の変更に失敗しました: {error}")
+        return None, [], f"Google Driveの領収書フォルダを確認できませんでした: {error}"
+
+
+def receipts_for_month(files: list[dict[str, str]], target_month: str) -> dict[str, StoredReceipt | None]:
+    return {
+        service.id: find_receipt(files, service, target_month)
+        for service in SERVICES
+    }
+
+
+def failure_for(service_id: str, target_month: str) -> dict[str, str] | None:
+    failure = st.session_state.get(FAILURE_KEY)
+    if not isinstance(failure, dict):
+        return None
+    if failure.get("service_id") != service_id or failure.get("target_month") != target_month:
+        return None
+    return failure
+
+
+def batch_for(target_month: str) -> dict[str, Any] | None:
+    batch = st.session_state.get(BATCH_KEY)
+    if not isinstance(batch, dict) or batch.get("target_month") != target_month:
+        return None
+    return batch
+
+
+def render_service_rows(
+    receipts: dict[str, StoredReceipt | None],
+    target_month: str,
+    batch: dict[str, Any] | None,
+) -> None:
+    pending = list(batch.get("service_ids", ())) if batch else []
+    current_service = str(batch.get("current_service") or "") if batch else ""
+
+    for service in SERVICES:
+        receipt = receipts[service.id]
+        failure = failure_for(service.id, target_month) if receipt is None else None
+        if receipt is not None:
+            status = "saved"
+            detail = "Google DriveでPDFを確認済み"
+        elif service.id == current_service:
+            status = "running"
+            detail = "自動取得を実行中"
+        elif batch and service.id in pending:
+            status = "queued"
+            detail = "自動取得を待機中"
+        elif failure:
+            status = "failed"
+            detail = failure.get("message", "自動取得に失敗しました。")
+        else:
+            status = "missing"
+            detail = "該当するPDFはDriveにありません"
+
+        ui_styles.render_service_card(
+            label=service.label,
+            eyebrow=service.default_partner,
+            status=status,
+            detail=detail,
+            file_name=receipt.file_name if receipt else "",
+            drive_url=receipt.web_view_link if receipt else "",
+        )
+
+
+def queue_batch(target_month: str, service_ids: list[str]) -> None:
+    if not service_ids:
         return
-    st.session_state["drive_filename_audit_notice"] = "ファイル名を変更し、保存台帳を同期しました。"
+    st.session_state[BATCH_KEY] = {
+        "target_month": target_month,
+        "service_ids": service_ids,
+        "completed": [],
+        "current_service": service_ids[0],
+    }
+    st.session_state.pop(FAILURE_KEY, None)
+    st.session_state.pop(NOTICE_KEY, None)
     st.rerun()
 
 
-def render_settings() -> None:
-    render_section_heading("接続", TEXT["settings"], "Google Driveとの連携状態")
-    st.write("Google Drive保存先")
-    st.code(RECEIPT_DRIVE_FOLDER_ID, language="text")
-    st.link_button("領収書フォルダを開く", RECEIPT_DRIVE_FOLDER_URL)
+def cleanup_runtime(browser: ManagedBrowser | None, run_dir: Path) -> str:
+    errors: list[str] = []
+    if browser is not None:
+        try:
+            browser.close(clear_profile=True)
+        except Exception as error:
+            errors.append(f"ブラウザを終了できませんでした: {error}")
 
-    if secrets_configured():
-        st.success("Google Drive用のStreamlit Secretsが設定されています。")
-    else:
-        st.warning("Google Drive用のStreamlit Secretsが未設定です。")
-    st.caption("保存台帳はGoogle Driveの `_receipt_index.csv` にも同期されます。")
+    runtime_root = (DATA_DIR / "acquisition-runtime").resolve()
+    target = run_dir.resolve()
+    if target == runtime_root or runtime_root not in target.parents:
+        errors.append("一時ファイルの削除対象が不正です。")
+    elif target.exists():
+        try:
+            shutil.rmtree(target)
+        except Exception as error:
+            errors.append(f"一時ファイルを削除できませんでした: {error}")
+    return " ".join(errors)
 
-    st.write("ログインSecrets")
-    for service in SERVICES:
-        if login_secrets_configured(service.id):
-            st.success(f"{service.label}: 設定済み")
-        else:
-            st.warning(f"{service.label}: 未設定")
-    st.code(
-        """
-[epos]
-login_id = "エポスNet ID"
-password = "エポスNetパスワード"
 
-[commufa]
-login_id = "Myコミュファ ログインIDまたはメールアドレス"
-password = "Myコミュファ パスワード"
+def execute_next_service(storage: DriveStorage, batch: dict[str, Any]) -> None:
+    target_month = str(batch["target_month"])
+    service_ids = list(batch.get("service_ids", ()))
+    completed = list(batch.get("completed", ()))
+    remaining = [service_id for service_id in service_ids if service_id not in completed]
 
-[tokuten]
-email = "Outlook / Microsoftアカウント"
-password = "Outlook / Microsoftパスワード"
+    if not remaining:
+        st.session_state[NOTICE_KEY] = "未取得だったPDFをすべてGoogle Driveで確認しました。"
+        st.session_state.pop(BATCH_KEY, None)
+        st.rerun()
 
-[webbilling]
-d_account_id = "dアカウントID"
-password = "dアカウントパスワード"
-""".strip(),
-        language="toml",
+    service_id = remaining[0]
+    service = service_by_id(service_id)
+    position = service_ids.index(service_id) + 1
+    batch["current_service"] = service_id
+    st.session_state[BATCH_KEY] = batch
+    status_box = st.status(
+        f"{position}/{len(service_ids)}  {service.label}を自動取得しています。",
+        expanded=True,
     )
-    st.caption("Secretsの実値は画面に表示しません。GitHubには入れず、Streamlit CloudのSecretsに設定してください。")
+
+    run_dir = DATA_DIR / "acquisition-runtime" / f"{service_id}-{target_month}"
+    browser: ManagedBrowser | None = None
+    result = None
+    unexpected_error = ""
+    try:
+        credentials = service_credentials(st.secrets, service_id)
+        browser = ManagedBrowser(
+            profile_dir=run_dir / "profile",
+            download_dir=run_dir / "downloads",
+        )
+        fetcher = build_receipt_fetcher(service_id, browser, credentials)
+        result = run_auto_acquisition(
+            service_id=service_id,
+            target_month=target_month,
+            fetcher=fetcher,
+            storage=storage,
+            on_progress=lambda event: status_box.write(event.message),
+        )
+    except Exception as error:
+        unexpected_error = f"自動取得を開始できませんでした: {error}"
+    finally:
+        cleanup_error = cleanup_runtime(browser, run_dir)
+        if cleanup_error:
+            LOGGER.error("Acquisition runtime cleanup failed: %s", cleanup_error)
+
+    failure_code = ""
+    failure_message = ""
+    if unexpected_error:
+        failure_code = "UNEXPECTED_ERROR"
+        failure_message = unexpected_error
+    elif result is None:
+        failure_code = "ACQUISITION_FAILED"
+        failure_message = "自動取得結果を確認できませんでした。"
+    elif not result.success:
+        failure = result.failure
+        failure_code = failure.code if failure else "ACQUISITION_FAILED"
+        failure_message = failure.message if failure else "自動取得に失敗しました。"
+    if failure_code:
+        st.session_state[FAILURE_KEY] = {
+            "service_id": service_id,
+            "target_month": target_month,
+            "code": failure_code,
+            "message": failure_message,
+        }
+        st.session_state.pop(BATCH_KEY, None)
+        status_box.update(
+            label=f"{service.label}の自動取得に失敗したため終了しました。",
+            state="error",
+        )
+        st.rerun()
+
+    completed.append(service_id)
+    batch["completed"] = completed
+    next_services = [item for item in service_ids if item not in completed]
+    if next_services:
+        batch["current_service"] = next_services[0]
+        st.session_state[BATCH_KEY] = batch
+        status_box.update(
+            label=f"{service.label}をDriveで確認しました。次へ進みます。",
+            state="complete",
+        )
+    else:
+        st.session_state[NOTICE_KEY] = "未取得だったPDFをすべてGoogle Driveで確認しました。"
+        st.session_state.pop(BATCH_KEY, None)
+        status_box.update(label="自動取得が完了しました。", state="complete")
+
+    st.rerun()
 
 
-def _mime_type(extension: str) -> str:
-    return {
-        "pdf": "application/pdf",
-        "csv": "text/csv",
-        "png": "image/png",
-        "jpg": "image/jpeg",
-        "jpeg": "image/jpeg",
-    }.get(extension.lower(), "application/octet-stream")
+ui_styles.inject_design()
+storage, drive_files, drive_error = load_drive_snapshot()
+ui_styles.render_compact_header(
+    sync_label=current_sync_label() if not drive_error else "Drive未確認",
+    drive_url=RECEIPT_DRIVE_FOLDER_URL,
+)
 
+months = list(reversed(selectable_months()))
+selected_month = st.selectbox(
+    "対象月",
+    months,
+    format_func=month_label,
+    key="getreceipt_month",
+    label_visibility="collapsed",
+    disabled=isinstance(st.session_state.get(BATCH_KEY), dict),
+)
 
-inject_design()
-render_workspace_header()
+if drive_error or storage is None:
+    st.session_state.pop(BATCH_KEY, None)
+    ui_styles.render_month_hero(
+        month_label=month_label(selected_month),
+        saved_count=0,
+        detail="Driveの保存状況を確認できません",
+        state="failed",
+    )
+    ui_styles.render_fatal_notice(
+        title="Google Driveへ接続できません",
+        detail=drive_error,
+        code="DRIVE_CONNECTION_FAILED",
+    )
+    st.stop()
 
-tabs = st.tabs([
-    TEXT["dashboard"],
-    TEXT["manual_upload"],
-    TEXT["filename_audit"],
-    TEXT["ledger"],
-    TEXT["settings"],
-])
-with tabs[0]:
-    render_acquisition_workspace()
-with tabs[1]:
-    render_manual_upload()
-with tabs[2]:
-    render_drive_filename_audit()
-with tabs[3]:
-    render_history()
-with tabs[4]:
-    render_settings()
+receipts = receipts_for_month(drive_files, selected_month)
+saved_count = sum(receipt is not None for receipt in receipts.values())
+missing_services = [service for service in SERVICES if receipts[service.id] is None]
+active_batch = batch_for(selected_month)
+
+stored_failure = st.session_state.get(FAILURE_KEY)
+if isinstance(stored_failure, dict):
+    failed_service_id = str(stored_failure.get("service_id") or "")
+    if (
+        stored_failure.get("target_month") == selected_month
+        and receipts.get(failed_service_id) is not None
+    ):
+        st.session_state.pop(FAILURE_KEY, None)
+
+if saved_count == len(SERVICES):
+    hero_detail = "4件すべてのPDFをGoogle Driveで確認しました"
+    hero_state = "complete"
+elif active_batch:
+    hero_detail = "未取得PDFの自動取得を実行しています"
+    hero_state = "running"
+else:
+    hero_detail = f"未取得は{len(missing_services)}件です"
+    hero_state = "ready"
+
+ui_styles.render_month_hero(
+    month_label=month_label(selected_month),
+    saved_count=saved_count,
+    detail=hero_detail,
+    state=hero_state,
+)
+ui_styles.render_progress(
+    completed=saved_count,
+    active_label=(
+        service_by_id(str(active_batch.get("current_service"))).label
+        if active_batch and active_batch.get("current_service")
+        else ""
+    ),
+    state="running" if active_batch else ("complete" if saved_count == len(SERVICES) else "idle"),
+)
+
+notice = st.session_state.pop(NOTICE_KEY, "")
+if notice:
+    st.success(notice, icon=":material/check_circle:")
+
+visible_failure = next(
+    (failure_for(service.id, selected_month) for service in SERVICES if failure_for(service.id, selected_month)),
+    None,
+)
+missing_credentials = [
+    service.label
+    for service in missing_services
+    if not credentials_configured(st.secrets, service.id)
+]
+
+if visible_failure:
+    ui_styles.render_fatal_notice(
+        title="自動取得に失敗したため終了しました",
+        detail=visible_failure.get("message", "自動取得に失敗しました。"),
+        code=visible_failure.get("code", "ACQUISITION_FAILED"),
+    )
+
+if not active_batch and missing_services and missing_credentials:
+    ui_styles.render_fatal_notice(
+        title="自動取得を開始できません",
+        detail=f"ログイン情報が未設定です: {'、'.join(missing_credentials)}",
+        code="CREDENTIALS_MISSING",
+    )
+elif not active_batch and missing_services:
+    retrying = visible_failure is not None
+    if st.button(
+        f"未取得{len(missing_services)}件を{'再度' if retrying else ''}自動取得",
+        type="primary",
+        use_container_width=True,
+        icon=":material/download:",
+    ):
+        queue_batch(selected_month, [service.id for service in missing_services])
+
+render_service_rows(receipts, selected_month, active_batch)
+
+st.link_button(
+    "Google Driveの領収書フォルダを開く",
+    RECEIPT_DRIVE_FOLDER_URL,
+    use_container_width=True,
+    icon=":material/folder_open:",
+)
+
+if active_batch:
+    execute_next_service(storage, active_batch)

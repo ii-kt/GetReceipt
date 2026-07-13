@@ -1,9 +1,18 @@
 from __future__ import annotations
 
+from html import escape
+
 import streamlit as st
 
 
-DESIGN_SOURCE = "Mobbin, Land-book, Awwwards, and Recent app-gallery direction"
+_STATUS = {
+    "saved": ("Drive確認済み", "check"),
+    "missing": ("未取得", "missing"),
+    "queued": ("待機中", "queued"),
+    "running": ("取得中", "running"),
+    "failed": ("失敗", "failed"),
+    "not_run": ("未実行", "queued"),
+}
 
 
 def inject_design() -> None:
@@ -11,456 +20,399 @@ def inject_design() -> None:
         """
         <style>
         :root {
-          --gr-bg: #f6f8f5;
-          --gr-surface: #ffffff;
-          --gr-surface-soft: #eef5ef;
-          --gr-ink: #111411;
-          --gr-muted: #657064;
-          --gr-faint: #98a195;
-          --gr-border: #dce5dc;
-          --gr-border-strong: #b8c7b9;
-          --gr-accent: #29d982;
-          --gr-accent-deep: #0b7d48;
-          --gr-accent-soft: #ddf8e9;
-          --gr-coral: #ff6b4a;
-          --gr-warning: #b7791f;
-          --gr-danger: #c7372f;
-          --gr-shadow: 0 14px 34px rgba(17, 20, 17, .08);
-          --gr-radius: 8px;
-          --gr-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-          --gr-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Yu Gothic", "Hiragino Kaku Gothic ProN", sans-serif;
+          --gr-ink: #171914;
+          --gr-muted: #6e7169;
+          --gr-canvas: #f3f1eb;
+          --gr-card: #fffefa;
+          --gr-line: #dedbd1;
+          --gr-success: #167447;
+          --gr-success-soft: #e5f2e9;
+          --gr-danger: #b83a32;
+          --gr-danger-soft: #f9e9e6;
+          --gr-progress: #2d63d7;
+          --gr-progress-soft: #e8eefc;
+          --gr-radius: 20px;
+        }
+
+        html, body, [class*="css"], .stApp {
+          font-family: Inter, "Noto Sans JP", "Yu Gothic UI", sans-serif;
         }
 
         .stApp {
-          background: var(--gr-bg);
           color: var(--gr-ink);
-          font-family: var(--gr-sans);
+          background:
+            radial-gradient(circle at 50% -140px, rgba(255,255,255,.98) 0, rgba(255,255,255,0) 390px),
+            var(--gr-canvas);
         }
 
-        #MainMenu,
-        footer,
+        [data-testid="stHeader"],
         [data-testid="stToolbar"],
-        [data-testid="stDecoration"] {
-          display: none;
+        #MainMenu,
+        footer {
+          display: none !important;
         }
 
-        [data-testid="stHeader"] {
-          background: rgba(246, 248, 245, .96);
-          border-bottom: 1px solid rgba(220, 229, 220, .88);
+        [data-testid="stAppViewContainer"] > .main {
+          overflow: visible;
         }
 
         .block-container {
-          max-width: 1040px;
-          padding: 1.05rem 1rem 3.2rem;
+          width: min(100%, 560px) !important;
+          max-width: 560px !important;
+          padding: 28px 22px 56px !important;
         }
 
-        .gr-app-header {
-          display: grid;
-          gap: 1rem;
-          margin: .25rem 0 1.05rem;
-          padding: .35rem 0 1.05rem;
-          border-bottom: 1px solid var(--gr-border);
-        }
-
-        .gr-header-main {
-          display: grid;
-          gap: .75rem;
-        }
-
-        .gr-brand-row {
+        .gr-header {
           display: flex;
-          gap: .85rem;
-          align-items: flex-start;
-          justify-content: space-between;
-        }
-
-        .gr-brand-lockup {
-          display: flex;
-          gap: .78rem;
           align-items: center;
-          min-width: 0;
+          justify-content: space-between;
+          gap: 16px;
+          margin: 0 0 22px;
         }
 
-        .gr-brand-mark {
+        .gr-brand {
+          display: flex;
+          align-items: center;
+          gap: 11px;
+        }
+
+        .gr-brand__mark {
           display: grid;
-          width: 42px;
-          height: 42px;
-          flex: 0 0 42px;
+          width: 34px;
+          height: 34px;
           place-items: center;
-          border-radius: var(--gr-radius);
+          border-radius: 11px;
+          color: #fff;
           background: var(--gr-ink);
-          color: #ffffff;
-          font-size: 1rem;
-          font-weight: 900;
-          letter-spacing: 0;
-          box-shadow: 0 10px 24px rgba(17, 20, 17, .16);
-        }
-
-        .gr-kicker {
-          color: var(--gr-muted);
-          font-size: .76rem;
-          font-weight: 760;
-          letter-spacing: 0;
-        }
-
-        .gr-title {
-          margin-top: .08rem;
-          color: var(--gr-ink);
-          font-size: 2.65rem;
-          line-height: .96;
-          font-weight: 880;
-          letter-spacing: 0;
-        }
-
-        .gr-live-badge {
-          flex: 0 0 auto;
-          padding: .5rem .68rem;
-          border: 1px solid var(--gr-border);
-          border-radius: var(--gr-radius);
-          background: var(--gr-surface);
-          color: var(--gr-muted);
-          font-size: .76rem;
-          font-weight: 780;
-          box-shadow: 0 8px 18px rgba(17, 20, 17, .05);
-        }
-
-        .gr-live-badge i {
-          display: inline-block;
-          width: .48rem;
-          height: .48rem;
-          margin-right: .38rem;
-          border-radius: 50%;
-          background: var(--gr-accent);
-          box-shadow: 0 0 0 4px rgba(41, 217, 130, .16);
-          vertical-align: .05rem;
-        }
-
-        .gr-subtitle,
-        .gr-section-detail {
-          color: var(--gr-muted);
-          font-size: .95rem;
-          line-height: 1.58;
-        }
-
-        .gr-header-aside {
-          display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
-          gap: .62rem;
-        }
-
-        .gr-aside-row {
-          display: grid;
-          gap: .3rem;
-          min-height: 74px;
-          align-content: center;
-          padding: .78rem .84rem;
-          border: 1px solid var(--gr-border);
-          border-radius: var(--gr-radius);
-          background: rgba(255, 255, 255, .9);
-          box-shadow: 0 10px 22px rgba(17, 20, 17, .05);
-        }
-
-        .gr-aside-row span {
-          color: var(--gr-muted);
-          font-size: .74rem;
-          font-weight: 760;
-          letter-spacing: 0;
-        }
-
-        .gr-aside-row b {
-          overflow: hidden;
-          color: var(--gr-ink);
-          font-family: var(--gr-mono);
-          font-size: 1rem;
+          font-size: 11px;
           font-weight: 850;
-          line-height: 1.2;
+          letter-spacing: -.04em;
+        }
+
+        .gr-brand__name {
+          font-size: 13px;
+          font-weight: 850;
+          letter-spacing: .11em;
+        }
+
+        .gr-brand__sub {
+          margin-top: 1px;
+          color: var(--gr-muted);
+          font-size: 12px;
+          letter-spacing: .04em;
+        }
+
+        .gr-sync {
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          color: var(--gr-muted);
+          font-size: 13px;
+          white-space: nowrap;
+        }
+
+        .gr-sync::before {
+          width: 7px;
+          height: 7px;
+          border-radius: 999px;
+          background: var(--gr-success);
+          content: "";
+          box-shadow: 0 0 0 4px rgba(22,116,71,.10);
+        }
+
+        .gr-sync a {
+          color: inherit !important;
+          text-decoration: none !important;
+        }
+
+        [data-testid="stSelectbox"] {
+          margin-bottom: 14px;
+        }
+
+        [data-testid="stSelectbox"] [data-baseweb="select"] > div {
+          min-height: 52px;
+          padding: 0 5px;
+          border: 1px solid var(--gr-line);
+          border-radius: 15px;
+          background: rgba(255,254,250,.84);
+          box-shadow: none;
+          font-size: 15px;
+          font-weight: 750;
+        }
+
+        .gr-hero {
+          position: relative;
+          overflow: hidden;
+          padding: 25px 24px 23px;
+          border-radius: 24px;
+          color: #fff;
+          background: #191c17;
+          box-shadow: 0 16px 42px rgba(23,25,20,.15);
+        }
+
+        .gr-hero::after {
+          position: absolute;
+          right: -52px;
+          bottom: -72px;
+          width: 190px;
+          height: 190px;
+          border: 1px solid rgba(255,255,255,.12);
+          border-radius: 999px;
+          content: "";
+          box-shadow: 0 0 0 25px rgba(255,255,255,.035), 0 0 0 54px rgba(255,255,255,.025);
+        }
+
+        .gr-hero--complete {
+          background: #123f2a;
+        }
+
+        .gr-hero--running {
+          background: #17345f;
+        }
+
+        .gr-hero--failed {
+          background: #52231f;
+        }
+
+        .gr-hero__month {
+          position: relative;
+          z-index: 1;
+          color: rgba(255,255,255,.70);
+          font-size: 12px;
+          font-weight: 700;
+          letter-spacing: .08em;
+        }
+
+        .gr-hero__score {
+          position: relative;
+          z-index: 1;
+          display: flex;
+          align-items: baseline;
+          gap: 7px;
+          margin: 11px 0 7px;
+        }
+
+        .gr-hero__score strong {
+          font-size: clamp(48px, 12vw, 64px);
+          font-weight: 820;
+          letter-spacing: -.07em;
+          line-height: .95;
+        }
+
+        .gr-hero__score span {
+          color: rgba(255,255,255,.72);
+          font-size: 14px;
+          font-weight: 650;
+        }
+
+        .gr-hero__detail {
+          position: relative;
+          z-index: 1;
+          color: rgba(255,255,255,.78);
+          font-size: 12px;
+          line-height: 1.65;
+        }
+
+        .gr-progress {
+          margin: 17px 2px 21px;
+        }
+
+        .gr-progress__meta {
+          display: flex;
+          justify-content: space-between;
+          margin-bottom: 8px;
+          color: var(--gr-muted);
+          font-size: 11px;
+          font-weight: 700;
+        }
+
+        .gr-progress__track {
+          overflow: hidden;
+          height: 6px;
+          border-radius: 999px;
+          background: #dedcd5;
+        }
+
+        .gr-progress__bar {
+          height: 100%;
+          border-radius: inherit;
+          background: var(--gr-ink);
+          transition: width .25s ease;
+        }
+
+        .gr-progress--complete .gr-progress__bar { background: var(--gr-success); }
+        .gr-progress--running .gr-progress__bar { background: var(--gr-progress); }
+
+        .gr-card {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto;
+          gap: 14px;
+          align-items: center;
+          margin: 0 0 10px;
+          padding: 17px 17px 16px;
+          border: 1px solid var(--gr-line);
+          border-radius: var(--gr-radius);
+          background: var(--gr-card);
+          box-shadow: 0 2px 0 rgba(23,25,20,.02);
+        }
+
+        .gr-card--saved { border-color: #c8dfd0; }
+        .gr-card--failed { border-color: #efc4be; }
+        .gr-card--running { border-color: #c8d5f5; }
+
+        .gr-card__eyebrow {
+          overflow: hidden;
+          margin-bottom: 4px;
+          color: var(--gr-muted);
+          font-size: 12px;
+          font-weight: 650;
+          line-height: 1.4;
           text-overflow: ellipsis;
           white-space: nowrap;
         }
 
-        .gr-section {
-          display: grid;
-          grid-template-columns: minmax(0, 1fr) minmax(180px, 330px);
-          gap: 1rem;
-          align-items: end;
-          margin: 1.25rem 0 .9rem;
-          padding-bottom: .72rem;
-          border-bottom: 1px solid var(--gr-border);
-        }
-
-        .gr-section-eyebrow {
-          display: inline-flex;
-          width: fit-content;
-          margin-bottom: .28rem;
-          padding: .22rem .46rem;
-          border-radius: 999px;
-          background: var(--gr-accent-soft);
-          color: var(--gr-accent-deep);
-          font-size: .72rem;
+        .gr-card__title {
+          font-size: 17px;
           font-weight: 820;
-          letter-spacing: 0;
+          letter-spacing: -.02em;
         }
 
-        .gr-section-title {
-          color: var(--gr-ink);
-          font-size: 1.5rem;
-          line-height: 1.2;
-          font-weight: 880;
-          letter-spacing: 0;
-        }
-
-        div[data-testid="stTabs"] [role="tablist"] {
-          position: sticky;
-          top: .35rem;
-          z-index: 5;
-          gap: .28rem;
-          overflow-x: auto;
-          padding: .32rem;
-          border: 1px solid var(--gr-border);
-          border-radius: var(--gr-radius);
-          background: rgba(255, 255, 255, .92);
-          box-shadow: 0 12px 28px rgba(17, 20, 17, .08);
-          backdrop-filter: blur(18px);
-        }
-
-        div[data-testid="stTabs"] button[role="tab"] {
-          min-height: 38px;
-          border-radius: 6px;
+        .gr-card__detail {
+          margin-top: 5px;
           color: var(--gr-muted);
-          font-weight: 780;
-          letter-spacing: 0;
+          font-size: 13px;
+          line-height: 1.55;
         }
 
-        div[data-testid="stTabs"] button[aria-selected="true"] {
-          color: #ffffff;
-          background: var(--gr-ink);
+        .gr-card__file {
+          overflow: hidden;
+          max-width: 360px;
+          margin-top: 4px;
+          color: var(--gr-success);
+          font-size: 12px;
+          font-weight: 650;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
 
-        div[data-testid="stTabs"] button[aria-selected="true"] p {
-          color: #ffffff;
+        .gr-card__side {
+          display: flex;
+          flex-direction: column;
+          align-items: flex-end;
+          gap: 8px;
         }
 
-        .gr-status-key {
-          display: grid;
-          grid-template-columns: repeat(3, minmax(0, 1fr));
-          gap: .62rem;
-          margin: .25rem 0 1.05rem;
-        }
-
-        .gr-status-key span {
-          display: grid;
-          grid-template-columns: 9px minmax(0, 1fr);
-          gap: .62rem;
-          align-items: center;
-          min-height: 42px;
-          padding: .48rem .66rem;
-          border: 1px solid var(--gr-border);
-          border-radius: var(--gr-radius);
-          background: var(--gr-surface);
-          color: var(--gr-ink);
-          font-size: .82rem;
-          font-weight: 780;
-          box-shadow: 0 8px 18px rgba(17, 20, 17, .04);
-        }
-
-        .gr-status-key i {
-          width: 9px;
-          height: 28px;
+        .gr-chip {
+          padding: 6px 9px;
           border-radius: 999px;
-        }
-
-        .gr-status-key .is-open i { background: var(--gr-accent); }
-        .gr-status-key .is-done i { background: var(--gr-ink); }
-        .gr-status-key .is-none i { background: var(--gr-coral); }
-
-        .gr-month-band {
-          margin: 1.05rem 0 .52rem;
-          padding: .72rem .82rem;
-          border: 1px solid var(--gr-border);
-          border-radius: var(--gr-radius);
-          background: var(--gr-ink);
-          color: #ffffff;
-          font-size: .98rem;
-          font-weight: 850;
-          letter-spacing: 0;
-          box-shadow: 0 12px 26px rgba(17, 20, 17, .1);
-        }
-
-        .gr-service-cell {
-          display: grid;
-          align-content: center;
-          min-height: 42px;
-          padding: .18rem 0 .52rem;
-        }
-
-        .gr-service-cell span {
-          color: var(--gr-ink);
-          font-size: .95rem;
-          font-weight: 820;
-          line-height: 1.25;
-        }
-
-        .gr-service-cell small {
-          margin-top: .12rem;
-          color: var(--gr-muted);
-          font-size: .72rem;
-          font-weight: 700;
-        }
-
-        [data-testid="stMetric"] {
-          min-height: 92px;
-          padding: .88rem .92rem;
-          border: 1px solid var(--gr-border);
-          border-radius: var(--gr-radius);
-          background: var(--gr-surface);
-          box-shadow: 0 10px 22px rgba(17, 20, 17, .05);
-        }
-
-        [data-testid="stMetricLabel"] {
-          color: var(--gr-muted);
-          font-size: .78rem;
-          font-weight: 780;
-        }
-
-        [data-testid="stMetricValue"] {
-          color: var(--gr-ink);
-          font-family: var(--gr-mono);
-          font-size: 1.74rem;
-          font-weight: 850;
-        }
-
-        .stButton > button,
-        .stDownloadButton > button,
-        [data-testid="stLinkButton"] > a {
-          min-height: 42px;
-          border: 1px solid var(--gr-border-strong);
-          border-radius: var(--gr-radius);
-          background: var(--gr-surface);
-          color: var(--gr-ink);
+          color: #63665f;
+          background: #eeece6;
+          font-size: 12px;
           font-weight: 800;
-          letter-spacing: 0;
-          box-shadow: 0 8px 18px rgba(17, 20, 17, .04);
-          transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease, background .15s ease;
+          white-space: nowrap;
         }
 
-        .stButton > button[kind="primary"],
-        .stDownloadButton > button[kind="primary"],
-        button[data-testid="baseButton-primary"] {
-          border-color: #0f8a50;
-          background: var(--gr-accent);
-          color: var(--gr-ink);
+        .gr-chip--check { color: var(--gr-success); background: var(--gr-success-soft); }
+        .gr-chip--failed { color: var(--gr-danger); background: var(--gr-danger-soft); }
+        .gr-chip--running { color: var(--gr-progress); background: var(--gr-progress-soft); }
+
+        .gr-card__link {
+          display: inline-flex;
+          align-items: center;
+          min-height: 44px;
+          margin: -8px -8px -8px 0;
+          padding: 8px;
+          color: var(--gr-ink) !important;
+          font-size: 12px;
+          font-weight: 800;
+          text-decoration: none !important;
         }
 
-        .stButton > button:hover,
-        .stDownloadButton > button:hover,
-        [data-testid="stLinkButton"] > a:hover {
-          border-color: var(--gr-ink);
-          color: var(--gr-ink);
-          box-shadow: 0 0 0 4px rgba(41, 217, 130, .16);
+        .gr-card__link:hover { text-decoration: underline !important; }
+
+        .gr-card__link:focus-visible,
+        .gr-sync a:focus-visible,
+        [data-testid="stButton"] > button:focus-visible,
+        [data-testid="stLinkButton"] > a:focus-visible {
+          outline: 3px solid rgba(31, 83, 163, .35) !important;
+          outline-offset: 3px !important;
+        }
+
+        .gr-fatal {
+          margin: 14px 0;
+          padding: 16px 17px;
+          border: 1px solid #efc4be;
+          border-radius: 17px;
+          background: var(--gr-danger-soft);
+        }
+
+        .gr-fatal__code {
+          color: var(--gr-danger);
+          font-size: 11px;
+          font-weight: 850;
+          letter-spacing: .09em;
+        }
+
+        .gr-fatal__title {
+          margin: 5px 0 4px;
+          color: #692821;
+          font-size: 15px;
+          font-weight: 820;
+        }
+
+        .gr-fatal__detail {
+          color: #815049;
+          font-size: 13px;
+          line-height: 1.6;
+        }
+
+        [data-testid="stButton"] > button,
+        [data-testid="stLinkButton"] > a {
+          min-height: 52px;
+          border-radius: 16px !important;
+          font-size: 15px !important;
+          font-weight: 800 !important;
+          box-shadow: none !important;
+        }
+
+        [data-testid="stButton"] > button[kind="primary"] {
+          border-color: var(--gr-ink) !important;
+          color: #fff !important;
+          background: var(--gr-ink) !important;
+        }
+
+        [data-testid="stButton"] > button[kind="primary"]:hover {
+          border-color: #2a2f27 !important;
+          background: #2a2f27 !important;
           transform: translateY(-1px);
         }
 
-        .stButton > button[kind="primary"]:hover,
-        .stDownloadButton > button[kind="primary"]:hover,
-        button[data-testid="baseButton-primary"]:hover {
-          background: #35e58b;
-          color: var(--gr-ink);
+        [data-testid="stLinkButton"] > a {
+          margin-top: 4px;
+          border-color: var(--gr-line) !important;
+          color: var(--gr-muted) !important;
+          background: transparent !important;
         }
 
-        .stButton > button:disabled {
-          border-color: var(--gr-border);
-          background: #eef1ec;
-          color: var(--gr-faint);
-          opacity: 1;
-          transform: none;
-          box-shadow: none;
-        }
-
-        div[data-testid="stExpander"] {
-          border: 1px solid var(--gr-border);
-          border-radius: var(--gr-radius);
-          background: var(--gr-surface);
-          box-shadow: 0 8px 18px rgba(17, 20, 17, .05);
-        }
-
-        div[data-testid="stDataFrame"] {
-          overflow: hidden;
-          border: 1px solid var(--gr-border);
-          border-radius: var(--gr-radius);
-          background: var(--gr-surface);
-          box-shadow: 0 10px 22px rgba(17, 20, 17, .04);
+        [data-testid="stStatusWidget"] {
+          margin: 14px 0;
+          border: 1px solid var(--gr-line);
+          border-radius: 17px;
+          background: var(--gr-card);
         }
 
         [data-testid="stAlert"] {
-          border: 1px solid var(--gr-border);
-          border-radius: var(--gr-radius);
-          background: var(--gr-surface);
+          border-radius: 16px;
         }
 
-        code {
-          border: 1px solid var(--gr-border);
-          border-radius: var(--gr-radius);
-          background: var(--gr-surface-soft);
-          color: var(--gr-ink);
-        }
-
-        input,
-        textarea,
-        select {
-          border-radius: var(--gr-radius) !important;
-        }
-
-        hr {
-          border-color: var(--gr-border);
-        }
-
-        @media (max-width: 760px) {
-          .block-container {
-            padding: .82rem .86rem 3rem;
-          }
-
-          .gr-brand-row {
-            align-items: center;
-          }
-
-          .gr-brand-mark {
-            width: 38px;
-            height: 38px;
-            flex-basis: 38px;
-          }
-
-          .gr-title {
-            font-size: 2.1rem;
-          }
-
-          .gr-live-badge {
-            padding: .42rem .54rem;
-            font-size: .72rem;
-          }
-
-          .gr-header-aside {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: .5rem;
-          }
-
-          .gr-aside-row {
-            min-height: 68px;
-            padding: .68rem .72rem;
-          }
-
-          .gr-section {
-            grid-template-columns: 1fr;
-            gap: .35rem;
-            margin-top: 1.05rem;
-          }
-
-          .gr-status-key {
-            grid-template-columns: 1fr;
-          }
-
-          .gr-service-cell small {
-            display: none;
-          }
+        @media (max-width: 640px) {
+          .block-container { padding: 18px 15px 42px !important; }
+          .gr-header { margin-bottom: 16px; }
+          .gr-brand__sub { display: none; }
+          .gr-hero { padding: 22px 20px 21px; border-radius: 21px; }
+          .gr-card { padding: 15px; border-radius: 17px; }
+          .gr-card__file { max-width: 230px; }
+          .gr-card__eyebrow { max-width: 230px; }
         }
         </style>
         """,
@@ -468,45 +420,119 @@ def inject_design() -> None:
     )
 
 
-def render_app_header(*, saved_count: int, open_slots: int, done_slots: int, current_month: str) -> None:
+def render_compact_header(*, sync_label: str = "Drive未確認", drive_url: str = "") -> None:
+    sync = escape(sync_label)
+    if drive_url:
+        sync = (
+            f'<a href="{escape(drive_url, quote=True)}" target="_blank" '
+            f'rel="noopener noreferrer" aria-label="{sync}（新しいタブでDriveを開く）">{sync}</a>'
+        )
     st.markdown(
         f"""
-        <div class="gr-app-header">
-          <div class="gr-header-main">
-            <div class="gr-brand-row">
-              <div class="gr-brand-lockup">
-                <div class="gr-brand-mark">GR</div>
-                <div>
-                  <div class="gr-kicker">Drive receipt sync</div>
-                  <div class="gr-title">GetReceipt</div>
-                </div>
-              </div>
-              <div class="gr-live-badge"><i></i>Cloud</div>
+        <div class="gr-header">
+          <div class="gr-brand">
+            <div class="gr-brand__mark">GR</div>
+            <div>
+              <div class="gr-brand__name">GETRECEIPT</div>
+              <div class="gr-brand__sub">AUTOMATIC RECEIPT COLLECTION</div>
             </div>
-            <div class="gr-subtitle">領収書の取得状況、Drive保存、台帳整理をまとめて確認します。</div>
           </div>
-          <div class="gr-header-aside">
-            <div class="gr-aside-row"><span>保存済み</span><b>{saved_count}</b></div>
-            <div class="gr-aside-row"><span>未取得</span><b>{open_slots}</b></div>
-            <div class="gr-aside-row"><span>完了</span><b>{done_slots}</b></div>
-            <div class="gr-aside-row"><span>対象月</span><b>{current_month}</b></div>
-          </div>
+          <div class="gr-sync">{sync}</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
 
-def render_section_heading(eyebrow: str, title: str, detail: str) -> None:
+def render_month_hero(
+    *,
+    month_label: str,
+    saved_count: int,
+    total_count: int = 4,
+    detail: str = "",
+    state: str = "ready",
+) -> None:
+    state_class = state if state in {"complete", "failed", "running"} else "ready"
     st.markdown(
         f"""
-        <div class="gr-section">
-          <div>
-            <div class="gr-section-eyebrow">{eyebrow}</div>
-            <div class="gr-section-title">{title}</div>
-          </div>
-          <div class="gr-section-detail">{detail}</div>
+        <section class="gr-hero gr-hero--{state_class}">
+          <div class="gr-hero__month">{escape(month_label)}</div>
+          <div class="gr-hero__score"><strong>{int(saved_count)}</strong><span>/ {int(total_count)} Drive確認済み</span></div>
+          <div class="gr-hero__detail">{escape(detail)}</div>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_progress(
+    *,
+    completed: int,
+    total: int = 4,
+    active_label: str = "",
+    state: str = "idle",
+) -> None:
+    total = max(int(total), 1)
+    completed = max(0, min(int(completed), total))
+    percent = round(completed / total * 100)
+    right = f"{escape(active_label)}を処理中" if active_label else f"{percent}%"
+    st.markdown(
+        f"""
+        <div class="gr-progress gr-progress--{escape(state)}" role="progressbar"
+             aria-label="月次領収書の取得進捗" aria-valuemin="0"
+             aria-valuemax="{total}" aria-valuenow="{completed}">
+          <div class="gr-progress__meta"><span>MONTHLY RECEIPTS</span><span>{right}</span></div>
+          <div class="gr-progress__track"><div class="gr-progress__bar" style="width:{percent}%"></div></div>
         </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_service_card(
+    *,
+    label: str,
+    status: str,
+    detail: str = "",
+    file_name: str = "",
+    drive_url: str = "",
+    eyebrow: str = "",
+) -> None:
+    status_label, status_style = _STATUS.get(status, _STATUS["missing"])
+    file_line = f'<div class="gr-card__file">{escape(file_name)}</div>' if file_name else ""
+    link = (
+        f'<a class="gr-card__link" href="{escape(drive_url, quote=True)}" target="_blank" '
+        f'rel="noopener noreferrer" aria-label="{escape(label)}のPDFをDriveで開く（新しいタブ）">Driveで開く ↗</a>'
+        if drive_url
+        else ""
+    )
+    st.markdown(
+        f"""
+        <article class="gr-card gr-card--{escape(status)}">
+          <div class="gr-card__main">
+            <div class="gr-card__eyebrow">{escape(eyebrow)}</div>
+            <div class="gr-card__title">{escape(label)}</div>
+            <div class="gr-card__detail">{escape(detail)}</div>
+            {file_line}
+          </div>
+          <div class="gr-card__side">
+            <span class="gr-chip gr-chip--{status_style}">{escape(status_label)}</span>
+            {link}
+          </div>
+        </article>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_fatal_notice(*, title: str, detail: str, code: str = "") -> None:
+    st.markdown(
+        f"""
+        <aside class="gr-fatal" role="alert" aria-live="assertive">
+          <div class="gr-fatal__code">{escape(code or 'ERROR')}</div>
+          <div class="gr-fatal__title">{escape(title)}</div>
+          <div class="gr-fatal__detail">{escape(detail)}</div>
+        </aside>
         """,
         unsafe_allow_html=True,
     )

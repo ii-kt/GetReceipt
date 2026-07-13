@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT_DIR / "data"
-LEDGER_PATH = DATA_DIR / "receipt_index.csv"
 
 RECEIPT_DRIVE_FOLDER_ID = "1jwaMMK-KGIyUampBWOjRIY3BULuj6W-M"
 RECEIPT_DRIVE_FOLDER_URL = f"https://drive.google.com/drive/folders/{RECEIPT_DRIVE_FOLDER_ID}"
 TARGET_MONTH_START = (2026, 1)
-DISPLAY_FUTURE_MONTHS = 2
+TOKYO = ZoneInfo("Asia/Tokyo")
 
 
 @dataclass(frozen=True)
@@ -21,13 +21,44 @@ class ServiceDefinition:
     label: str
     default_partner: str
     portal_url: str
+    partner_aliases: tuple[str, ...]
+    accepts_yenless_amount: bool = False
 
 
 SERVICES = (
-    ServiceDefinition("epos", "\u5bb6\u8cc3", "\u682a\u5f0f\u4f1a\u793e\u30a8\u30dd\u30b9\u30ab\u30fc\u30c9", "https://www.eposcard.co.jp/memberservice/pc/nocardusedetail/menu_preload.do"),
-    ServiceDefinition("commufa", "Wi-Fi", "\u4e2d\u90e8\u30c6\u30ec\u30b3\u30df\u30e5\u30cb\u30b1\u30fc\u30b7\u30e7\u30f3\u682a\u5f0f\u4f1a\u793e", "https://mypage.commufa.jp/join/s/"),
-    ServiceDefinition("tokuten", "\u96fb\u6c17", "\u30d5\u30e9\u30c3\u30c8\u30a8\u30ca\u30b8\u30fc\u682a\u5f0f\u4f1a\u793e", "https://outlook.live.com/mail/0/"),
-    ServiceDefinition("mobile", "\u643a\u5e2f", "\u682a\u5f0f\u4f1a\u793eNTT\u30c9\u30b3\u30e2", "https://webbilling.ntt-finance.co.jp/mem/b0201/init"),
+    ServiceDefinition(
+        id="epos",
+        label="家賃",
+        default_partner="株式会社エポスカード",
+        portal_url="https://www.eposcard.co.jp/memberservice/pc/nocardusedetail/menu_preload.do",
+        partner_aliases=("株式会社エポスカード",),
+    ),
+    ServiceDefinition(
+        id="commufa",
+        label="Wi-Fi",
+        default_partner="中部テレコミュニケーション株式会社",
+        portal_url="https://mypage.commufa.jp/join/s/",
+        partner_aliases=("中部テレコミュニケーション株式会社",),
+        accepts_yenless_amount=True,
+    ),
+    ServiceDefinition(
+        id="tokuten",
+        label="電気",
+        default_partner="フラットエナジー株式会社",
+        portal_url="https://outlook.live.com/mail/0/",
+        partner_aliases=("フラットエナジー株式会社",),
+    ),
+    ServiceDefinition(
+        id="mobile",
+        label="携帯",
+        default_partner="NTTファイナンス株式会社",
+        portal_url="https://webbilling.ntt-finance.co.jp/mem/b0201/init",
+        partner_aliases=(
+            "NTTファイナンス株式会社",
+            "株式会社NTTファイナンス",
+            "株式会社NTTドコモ",
+        ),
+    ),
 )
 
 
@@ -44,7 +75,7 @@ def month_key(year: int, month: int) -> str:
 
 def month_label(year_month: str) -> str:
     year, month = parse_month_key(year_month)
-    return f"{year}\u5e74{month}\u6708\u5206"
+    return f"{year}年{month}月分"
 
 
 def parse_month_key(value: str) -> tuple[int, int]:
@@ -62,12 +93,10 @@ def shift_month(year: int, month: int, delta: int) -> tuple[int, int]:
 
 
 def selectable_months(today: date | None = None) -> list[str]:
-    current = today or date.today()
-    start_year, start_month = TARGET_MONTH_START
-    end_year, end_month = shift_month(current.year, current.month, DISPLAY_FUTURE_MONTHS)
+    current = today or datetime.now(TOKYO).date()
+    year, month = TARGET_MONTH_START
     months: list[str] = []
-    year, month = start_year, start_month
-    while (year, month) <= (end_year, end_month):
+    while (year, month) <= (current.year, current.month):
         months.append(month_key(year, month))
         year, month = shift_month(year, month, 1)
     return months

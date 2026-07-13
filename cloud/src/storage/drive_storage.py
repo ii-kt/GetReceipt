@@ -35,7 +35,9 @@ def load_service_account_info(secrets: Any | None = None) -> dict[str, Any]:
     if secrets is not None and "google_service_account" in secrets:
         return _normalize_private_key(dict(secrets["google_service_account"]))
 
-    raw_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON") or os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+    raw_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON") or os.getenv(
+        "GOOGLE_APPLICATION_CREDENTIALS_JSON"
+    )
     if raw_json:
         return _normalize_private_key(json.loads(raw_json))
 
@@ -45,8 +47,8 @@ def load_service_account_info(secrets: Any | None = None) -> dict[str, Any]:
             return _normalize_private_key(json.load(file))
 
     raise DriveConfigError(
-        "\u30b5\u30fc\u30d3\u30b9\u30a2\u30ab\u30a6\u30f3\u30c8\u304c\u672a\u8a2d\u5b9a\u3067\u3059\u3002"
-        "Streamlit Secrets\u306e google_service_account \u306bJSON\u3092\u8a2d\u5b9a\u3057\u3066\u304f\u3060\u3055\u3044\u3002"
+        "サービスアカウントが未設定です。"
+        "Streamlit Secretsの google_service_account にJSONを設定してください。"
     )
 
 
@@ -55,10 +57,7 @@ def build_drive_service(service_account_info: dict[str, Any]):
         from google.oauth2 import service_account
         from googleapiclient.discovery import build
     except ModuleNotFoundError as error:
-        raise DriveConfigError(
-            "Google Drive\u9023\u643a\u30e9\u30a4\u30d6\u30e9\u30ea\u304c\u4e0d\u8db3\u3057\u3066\u3044\u307e\u3059\u3002"
-            "requirements.txt\u3092\u30a4\u30f3\u30b9\u30c8\u30fc\u30eb\u3057\u3066\u304f\u3060\u3055\u3044\u3002"
-        ) from error
+        raise DriveConfigError("Google Drive連携ライブラリが不足しています。") from error
 
     credentials = service_account.Credentials.from_service_account_info(
         service_account_info,
@@ -68,32 +67,26 @@ def build_drive_service(service_account_info: dict[str, Any]):
 
 
 class DriveStorage:
+    """The narrow Drive adapter required by the automatic acquisition app."""
+
     def __init__(self, service: Any, folder_id: str = RECEIPT_DRIVE_FOLDER_ID):
         self.service = service
         self.folder_id = folder_id
 
     @classmethod
-    def from_secrets(cls, secrets: Any | None = None, folder_id: str = RECEIPT_DRIVE_FOLDER_ID) -> "DriveStorage":
+    def from_secrets(
+        cls,
+        secrets: Any | None = None,
+        folder_id: str = RECEIPT_DRIVE_FOLDER_ID,
+    ) -> "DriveStorage":
         info = load_service_account_info(secrets)
         return cls(build_drive_service(info), folder_id=folder_id)
 
     def upload_bytes(self, *, file_name: str, content: bytes, mime_type: str) -> DriveUploadResult:
-        try:
-            from googleapiclient.http import MediaIoBaseUpload
-        except ModuleNotFoundError as error:
-            raise DriveConfigError(
-                "Google Drive\u9023\u643a\u30e9\u30a4\u30d6\u30e9\u30ea\u304c\u4e0d\u8db3\u3057\u3066\u3044\u307e\u3059\u3002"
-                "requirements.txt\u3092\u30a4\u30f3\u30b9\u30c8\u30fc\u30eb\u3057\u3066\u304f\u3060\u3055\u3044\u3002"
-            ) from error
-
-        media = MediaIoBaseUpload(BytesIO(content), mimetype=mime_type, resumable=False)
-        metadata = {
-            "name": file_name,
-            "parents": [self.folder_id],
-        }
+        media_upload = self._media_upload(content, mime_type)
         created = self.service.files().create(
-            body=metadata,
-            media_body=media,
+            body={"name": file_name, "parents": [self.folder_id]},
+            media_body=media_upload,
             fields="id,name,webViewLink",
             supportsAllDrives=True,
         ).execute()
@@ -105,21 +98,12 @@ class DriveStorage:
 
     def upsert_bytes(self, *, file_name: str, content: bytes, mime_type: str) -> DriveUploadResult:
         existing = self._find_first_by_name(file_name)
-        if not existing:
+        if existing is None:
             return self.upload_bytes(file_name=file_name, content=content, mime_type=mime_type)
 
-        try:
-            from googleapiclient.http import MediaIoBaseUpload
-        except ModuleNotFoundError as error:
-            raise DriveConfigError(
-                "Google Drive\u9023\u643a\u30e9\u30a4\u30d6\u30e9\u30ea\u304c\u4e0d\u8db3\u3057\u3066\u3044\u307e\u3059\u3002"
-                "requirements.txt\u3092\u30a4\u30f3\u30b9\u30c8\u30fc\u30eb\u3057\u3066\u304f\u3060\u3055\u3044\u3002"
-            ) from error
-
-        media = MediaIoBaseUpload(BytesIO(content), mimetype=mime_type, resumable=False)
         updated = self.service.files().update(
             fileId=existing["id"],
-            media_body=media,
+            media_body=self._media_upload(content, mime_type),
             fields="id,name,webViewLink",
             supportsAllDrives=True,
         ).execute()
@@ -148,39 +132,13 @@ class DriveStorage:
             if not page_token:
                 return files
 
-    def download_bytes_by_name(self, file_name: str) -> bytes | None:
-        existing = self._find_first_by_name(file_name)
-        if not existing:
-            return None
-
+    @staticmethod
+    def _media_upload(content: bytes, mime_type: str):
         try:
-            from googleapiclient.http import MediaIoBaseDownload
+            from googleapiclient.http import MediaIoBaseUpload
         except ModuleNotFoundError as error:
-            raise DriveConfigError(
-                "Google Drive\u9023\u643a\u30e9\u30a4\u30d6\u30e9\u30ea\u304c\u4e0d\u8db3\u3057\u3066\u3044\u307e\u3059\u3002"
-                "requirements.txt\u3092\u30a4\u30f3\u30b9\u30c8\u30fc\u30eb\u3057\u3066\u304f\u3060\u3055\u3044\u3002"
-            ) from error
-
-        request = self.service.files().get_media(fileId=existing["id"], supportsAllDrives=True)
-        buffer = BytesIO()
-        downloader = MediaIoBaseDownload(buffer, request)
-        done = False
-        while not done:
-            _, done = downloader.next_chunk()
-        return buffer.getvalue()
-
-    def rename_file(self, *, file_id: str, new_name: str) -> DriveUploadResult:
-        updated = self.service.files().update(
-            fileId=file_id,
-            body={"name": new_name},
-            fields="id,name,webViewLink",
-            supportsAllDrives=True,
-        ).execute()
-        return DriveUploadResult(
-            id=updated.get("id", file_id),
-            name=updated.get("name", new_name),
-            web_view_link=updated.get("webViewLink", ""),
-        )
+            raise DriveConfigError("Google Drive連携ライブラリが不足しています。") from error
+        return MediaIoBaseUpload(BytesIO(content), mimetype=mime_type, resumable=False)
 
     def _find_first_by_name(self, file_name: str) -> dict[str, str] | None:
         escaped_name = file_name.replace("\\", "\\\\").replace("'", "\\'")
@@ -194,4 +152,3 @@ class DriveStorage:
         ).execute()
         files = result.get("files", [])
         return files[0] if files else None
-

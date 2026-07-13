@@ -1,13 +1,21 @@
 [theme]
 base = "light"
-primaryColor = "#29d982"
-backgroundColor = "#f6f8f5"
-secondaryBackgroundColor = "#ffffff"
-textColor = "#111411"
+primaryColor = "#171914"
+backgroundColor = "#f3f1eb"
+secondaryBackgroundColor = "#fffefa"
+textColor = "#171914"
 font = "sans serif"
+baseRadius = "large"
+buttonRadius = "large"
+showWidgetBorder = true
+showSidebarBorder = false
 
 [client]
 toolbarMode = "minimal"
+showErrorDetails = "none"
 
 [browser]
 gatherUsageStats = false
+
+[server]
+runOnSave = false
