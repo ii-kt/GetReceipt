@@ -12,7 +12,7 @@ from ..config import ServiceDefinition, expected_transaction_month, parse_month_
 
 PDF_MIME_TYPE = "application/pdf"
 _RECEIPT_FILE_NAME = re.compile(
-    r"^(?P<transaction_date>\d{8})_(?P<partner>.+)_(?P<amount>\d+)(?P<yen>円?)\.pdf$",
+    r"^(?P<transaction_date>\d{8})_(?P<partner>.+)_(?P<amount>\d+)円\.pdf$",
     re.IGNORECASE,
 )
 
@@ -68,8 +68,6 @@ def find_receipt(
         if transaction_date[:6] != month_prefix or not _valid_date(transaction_date):
             continue
         if not _valid_amount(match.group("amount")):
-            continue
-        if not match.group("yen") and not service.accepts_yenless_amount:
             continue
         if _normalize_partner(match.group("partner")) not in aliases:
             continue

@@ -57,8 +57,8 @@ def inject_design() -> None:
         }
 
         .block-container {
-          width: min(100%, 560px) !important;
-          max-width: 560px !important;
+          width: min(100%, 760px) !important;
+          max-width: 760px !important;
           padding: 28px 22px 56px !important;
         }
 
@@ -138,6 +138,67 @@ def inject_design() -> None:
           box-shadow: none;
           font-size: 15px;
           font-weight: 750;
+        }
+
+        [data-testid="stButtonGroup"],
+        [data-testid="stSegmentedControl"] {
+          margin: 0 0 18px;
+        }
+
+        [data-testid="stButtonGroup"] [role="radiogroup"],
+        [data-testid="stSegmentedControl"] [role="radiogroup"] {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          width: 100%;
+          padding: 4px;
+          border: 1px solid var(--gr-line);
+          border-radius: 17px;
+          background: rgba(255,254,250,.72);
+        }
+
+        [data-testid="stButtonGroup"] button,
+        [data-testid="stSegmentedControl"] button {
+          min-width: 0;
+          min-height: 44px;
+          border: 0 !important;
+          border-radius: 13px !important;
+          color: var(--gr-muted) !important;
+          background: transparent !important;
+          font-size: 14px !important;
+          font-weight: 800 !important;
+          box-shadow: none !important;
+        }
+
+        [data-testid="stButtonGroup"] button[aria-checked="true"],
+        [data-testid="stButtonGroup"] button[aria-pressed="true"],
+        [data-testid="stSegmentedControl"] button[aria-checked="true"],
+        [data-testid="stSegmentedControl"] button[aria-pressed="true"] {
+          color: #fff !important;
+          background: var(--gr-ink) !important;
+        }
+
+        [data-testid="stTextInput"] {
+          margin-bottom: 2px;
+        }
+
+        [data-testid="stTextInput"] input {
+          min-height: 50px;
+          border-color: var(--gr-line);
+          border-radius: 15px;
+          color: var(--gr-ink);
+          background: rgba(255,254,250,.84);
+          font-size: 14px;
+          box-shadow: none;
+        }
+
+        [data-testid="stTextInput"] input::placeholder {
+          color: #90938b;
+        }
+
+        [data-testid="stTextInput"] input:focus,
+        [data-testid="stSelectbox"] [data-baseweb="select"] > div:focus-within {
+          border-color: #777b72;
+          box-shadow: 0 0 0 3px rgba(23,25,20,.08);
         }
 
         .gr-hero {
@@ -330,8 +391,265 @@ def inject_design() -> None:
 
         .gr-card__link:hover { text-decoration: underline !important; }
 
+        .gr-archive-hero {
+          position: relative;
+          overflow: hidden;
+          margin-bottom: 18px;
+          padding: 24px;
+          border: 1px solid #d9d5ca;
+          border-radius: 24px;
+          background: linear-gradient(145deg, #fffefa 0%, #f4efe3 100%);
+          box-shadow: 0 12px 34px rgba(23,25,20,.08);
+        }
+
+        .gr-archive-hero::after {
+          position: absolute;
+          top: -54px;
+          right: -40px;
+          width: 170px;
+          height: 170px;
+          border: 1px solid rgba(23,25,20,.07);
+          border-radius: 999px;
+          content: "";
+          box-shadow: 0 0 0 26px rgba(23,25,20,.025), 0 0 0 53px rgba(23,25,20,.018);
+        }
+
+        .gr-archive-hero__eyebrow,
+        .gr-archive-section__count,
+        .gr-oneoff__date,
+        .gr-review__label {
+          color: var(--gr-muted);
+          font-size: 11px;
+          font-weight: 800;
+          letter-spacing: .08em;
+          text-transform: uppercase;
+        }
+
+        .gr-archive-hero__score {
+          position: relative;
+          z-index: 1;
+          display: flex;
+          align-items: baseline;
+          gap: 8px;
+          margin: 10px 0 18px;
+        }
+
+        .gr-archive-hero__score strong {
+          font-size: clamp(42px, 9vw, 58px);
+          font-weight: 840;
+          letter-spacing: -.065em;
+          line-height: .95;
+        }
+
+        .gr-archive-hero__score span {
+          color: var(--gr-muted);
+          font-size: 13px;
+          font-weight: 700;
+        }
+
+        .gr-archive-hero__stats {
+          position: relative;
+          z-index: 1;
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+          gap: 8px;
+        }
+
+        .gr-archive-stat {
+          min-width: 0;
+          padding: 11px 12px;
+          border: 1px solid rgba(23,25,20,.08);
+          border-radius: 14px;
+          background: rgba(255,255,255,.56);
+        }
+
+        .gr-archive-stat strong {
+          display: block;
+          margin-bottom: 2px;
+          font-size: 17px;
+          font-weight: 830;
+        }
+
+        .gr-archive-stat span {
+          overflow: hidden;
+          display: block;
+          color: var(--gr-muted);
+          font-size: 11px;
+          font-weight: 700;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .gr-archive-section {
+          display: flex;
+          align-items: baseline;
+          justify-content: space-between;
+          gap: 12px;
+          margin: 25px 2px 10px;
+        }
+
+        .gr-archive-section__title {
+          font-size: 18px;
+          font-weight: 830;
+          letter-spacing: -.025em;
+        }
+
+        .gr-oneoff {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto;
+          gap: 16px;
+          align-items: center;
+          margin-bottom: 10px;
+          padding: 17px;
+          border: 1px solid var(--gr-line);
+          border-radius: var(--gr-radius);
+          background: var(--gr-card);
+          box-shadow: 0 2px 0 rgba(23,25,20,.02);
+        }
+
+        .gr-oneoff--duplicate {
+          border-color: #e5c98d;
+          background: #fffdf5;
+        }
+
+        .gr-oneoff__main,
+        .gr-oneoff__side {
+          min-width: 0;
+        }
+
+        .gr-oneoff__partner {
+          overflow-wrap: anywhere;
+          margin: 4px 0 5px;
+          font-size: 16px;
+          font-weight: 820;
+          letter-spacing: -.015em;
+        }
+
+        .gr-oneoff__file {
+          overflow: hidden;
+          max-width: 500px;
+          color: var(--gr-muted);
+          font-size: 11px;
+          line-height: 1.5;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .gr-oneoff__side {
+          display: flex;
+          flex-direction: column;
+          align-items: flex-end;
+          gap: 8px;
+        }
+
+        .gr-oneoff__amount {
+          max-width: 220px;
+          overflow-wrap: anywhere;
+          font-size: 18px;
+          font-weight: 840;
+          letter-spacing: -.025em;
+          text-align: right;
+        }
+
+        .gr-oneoff__badges {
+          display: flex;
+          flex-wrap: wrap;
+          justify-content: flex-end;
+          gap: 5px;
+        }
+
+        .gr-oneoff__badge {
+          padding: 5px 8px;
+          border-radius: 999px;
+          color: #5f625b;
+          background: #efede7;
+          font-size: 10px;
+          font-weight: 820;
+          white-space: nowrap;
+        }
+
+        .gr-oneoff__badge--refund {
+          color: #8a4b13;
+          background: #faecd8;
+        }
+
+        .gr-oneoff__badge--duplicate {
+          color: #8a4b13;
+          background: #f8e8c3;
+        }
+
+        .gr-oneoff__link,
+        .gr-review__link {
+          display: inline-flex;
+          align-items: center;
+          min-height: 44px;
+          margin: -7px -7px -7px 0;
+          padding: 7px;
+          color: var(--gr-ink) !important;
+          font-size: 12px;
+          font-weight: 800;
+          text-decoration: none !important;
+        }
+
+        .gr-oneoff__link:hover,
+        .gr-review__link:hover {
+          text-decoration: underline !important;
+        }
+
+        .gr-archive-empty {
+          margin: 14px 0;
+          padding: 28px 22px;
+          border: 1px dashed #cfcbc0;
+          border-radius: 19px;
+          color: var(--gr-muted);
+          background: rgba(255,254,250,.55);
+          text-align: center;
+        }
+
+        .gr-archive-empty__title {
+          margin-bottom: 5px;
+          color: var(--gr-ink);
+          font-size: 15px;
+          font-weight: 820;
+        }
+
+        .gr-archive-empty__detail {
+          font-size: 13px;
+          line-height: 1.6;
+        }
+
+        .gr-review {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto;
+          gap: 14px;
+          align-items: center;
+          margin: 10px 0;
+          padding: 15px 16px;
+          border: 1px solid #e5c98d;
+          border-radius: 17px;
+          background: #fff9e9;
+        }
+
+        .gr-review__file {
+          overflow-wrap: anywhere;
+          margin: 4px 0 3px;
+          color: #5f481b;
+          font-size: 13px;
+          font-weight: 800;
+        }
+
+        .gr-review__reason {
+          color: #796537;
+          font-size: 12px;
+          line-height: 1.55;
+        }
+
         .gr-card__link:focus-visible,
+        .gr-oneoff__link:focus-visible,
+        .gr-review__link:focus-visible,
         .gr-sync a:focus-visible,
+        [data-testid="stButtonGroup"] button:focus-visible,
+        [data-testid="stSegmentedControl"] button:focus-visible,
         [data-testid="stButton"] > button:focus-visible,
         [data-testid="stLinkButton"] > a:focus-visible {
           outline: 3px solid rgba(31, 83, 163, .35) !important;
@@ -407,12 +725,33 @@ def inject_design() -> None:
 
         @media (max-width: 640px) {
           .block-container { padding: 18px 15px 42px !important; }
+          [data-testid="stHorizontalBlock"] { flex-wrap: wrap; gap: 8px !important; }
+          [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+            flex: 1 1 100% !important;
+            width: 100% !important;
+            min-width: 0 !important;
+          }
           .gr-header { margin-bottom: 16px; }
           .gr-brand__sub { display: none; }
           .gr-hero { padding: 22px 20px 21px; border-radius: 21px; }
           .gr-card { padding: 15px; border-radius: 17px; }
           .gr-card__file { max-width: 230px; }
           .gr-card__eyebrow { max-width: 230px; }
+          .gr-archive-hero { padding: 20px; border-radius: 21px; }
+          .gr-archive-hero__stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+          .gr-oneoff {
+            grid-template-columns: minmax(0, 1fr);
+            gap: 11px;
+            padding: 15px;
+            border-radius: 17px;
+          }
+          .gr-oneoff__file { max-width: 100%; white-space: normal; }
+          .gr-oneoff__side { align-items: flex-start; }
+          .gr-oneoff__amount { max-width: 100%; text-align: left; }
+          .gr-oneoff__badges { justify-content: flex-start; }
+          .gr-oneoff__link,
+          .gr-review__link { margin-left: -7px; }
+          .gr-review { grid-template-columns: minmax(0, 1fr); }
         }
         </style>
         """,
@@ -434,7 +773,7 @@ def render_compact_header(*, sync_label: str = "Drive未確認", drive_url: str 
             <div class="gr-brand__mark">GR</div>
             <div>
               <div class="gr-brand__name">GETRECEIPT</div>
-              <div class="gr-brand__sub">AUTOMATIC RECEIPT COLLECTION</div>
+              <div class="gr-brand__sub">MONTHLY COLLECTION &amp; RECEIPT ARCHIVE</div>
             </div>
           </div>
           <div class="gr-sync">{sync}</div>
@@ -520,6 +859,169 @@ def render_service_card(
             {link}
           </div>
         </article>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_archive_hero(
+    total_count: int,
+    visible_count: int,
+    refund_count: int,
+    review_count: int = 0,
+) -> None:
+    total = max(0, int(total_count))
+    visible = max(0, min(int(visible_count), total))
+    refunds = max(0, int(refund_count))
+    reviews = max(0, int(review_count))
+    total_text = escape(str(total))
+    visible_text = escape(str(visible))
+    refund_text = escape(str(refunds))
+    review_text = escape(str(reviews))
+    score_label = "件の単発領収書" if visible == total else f"/ {total_text} 件を表示"
+    review_stat = (
+        f"""
+        <div class="gr-archive-stat">
+          <strong>{review_text}</strong>
+          <span>要確認</span>
+        </div>
+        """
+        if reviews
+        else ""
+    )
+    st.markdown(
+        f"""
+        <section class="gr-archive-hero" aria-label="単発領収書の保存状況">
+          <div class="gr-archive-hero__eyebrow">ONE-OFF RECEIPT ARCHIVE</div>
+          <div class="gr-archive-hero__score"><strong>{visible_text}</strong><span>{score_label}</span></div>
+          <div class="gr-archive-hero__stats">
+            <div class="gr-archive-stat">
+              <strong>{total_text}</strong>
+              <span>Drive保存済み</span>
+            </div>
+            <div class="gr-archive-stat">
+              <strong>{visible_text}</strong>
+              <span>現在の表示</span>
+            </div>
+            <div class="gr-archive-stat">
+              <strong>{refund_text}</strong>
+              <span>返金あり</span>
+            </div>
+            {review_stat}
+          </div>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_archive_section(month_label: str, count: int) -> None:
+    label = escape(str(month_label))
+    count_text = escape(str(max(0, int(count))))
+    st.markdown(
+        f"""
+        <div class="gr-archive-section">
+          <div class="gr-archive-section__title">{label}</div>
+          <div class="gr-archive-section__count">{count_text} RECEIPTS</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_one_off_receipt_card(
+    transaction_date: str,
+    partner_name: str,
+    amount_label: str,
+    currency_label: str,
+    has_refund: bool,
+    file_name: str,
+    drive_url: str,
+    duplicate: bool = False,
+) -> None:
+    date_text = escape(str(transaction_date))
+    partner_text = escape(str(partner_name))
+    amount_text = escape(str(amount_label))
+    currency_text = escape(str(currency_label))
+    file_text = escape(str(file_name))
+    card_class = "gr-oneoff gr-oneoff--duplicate" if duplicate else "gr-oneoff"
+    currency_badge = (
+        f'<span class="gr-oneoff__badge">{currency_text}</span>' if currency_text else ""
+    )
+    refund_badge = (
+        '<span class="gr-oneoff__badge gr-oneoff__badge--refund">返金あり</span>'
+        if has_refund
+        else ""
+    )
+    duplicate_badge = (
+        '<span class="gr-oneoff__badge gr-oneoff__badge--duplicate">重複候補</span>'
+        if duplicate
+        else ""
+    )
+    link = ""
+    if drive_url:
+        url = escape(str(drive_url), quote=True)
+        aria_partner = escape(str(partner_name), quote=True)
+        link = (
+            f'<a class="gr-oneoff__link" href="{url}" target="_blank" '
+            f'rel="noopener noreferrer" aria-label="{aria_partner}の領収書をDriveで開く（新しいタブ）">'
+            "Driveで開く ↗</a>"
+        )
+    st.markdown(
+        f"""
+        <article class="{card_class}">
+          <div class="gr-oneoff__main">
+            <div class="gr-oneoff__date">{date_text}</div>
+            <div class="gr-oneoff__partner">{partner_text}</div>
+            <div class="gr-oneoff__file">{file_text}</div>
+          </div>
+          <div class="gr-oneoff__side">
+            <div class="gr-oneoff__amount">{amount_text}</div>
+            <div class="gr-oneoff__badges">{currency_badge}{refund_badge}{duplicate_badge}</div>
+            {link}
+          </div>
+        </article>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_archive_empty(title: str, detail: str) -> None:
+    title_text = escape(str(title))
+    detail_text = escape(str(detail))
+    st.markdown(
+        f"""
+        <div class="gr-archive-empty" role="status">
+          <div class="gr-archive-empty__title">{title_text}</div>
+          <div class="gr-archive-empty__detail">{detail_text}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_review_file(file_name: str, reason: str, drive_url: str) -> None:
+    file_text = escape(str(file_name))
+    reason_text = escape(str(reason))
+    link = ""
+    if drive_url:
+        url = escape(str(drive_url), quote=True)
+        aria_file = escape(str(file_name), quote=True)
+        link = (
+            f'<a class="gr-review__link" href="{url}" target="_blank" '
+            f'rel="noopener noreferrer" aria-label="{aria_file}をDriveで開く（新しいタブ）">'
+            "Driveで確認 ↗</a>"
+        )
+    st.markdown(
+        f"""
+        <aside class="gr-review" role="status">
+          <div>
+            <div class="gr-review__label">REVIEW REQUIRED</div>
+            <div class="gr-review__file">{file_text}</div>
+            <div class="gr-review__reason">{reason_text}</div>
+          </div>
+          {link}
+        </aside>
         """,
         unsafe_allow_html=True,
     )

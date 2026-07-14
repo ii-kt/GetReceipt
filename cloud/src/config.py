@@ -23,7 +23,6 @@ class ServiceDefinition:
     portal_url: str
     partner_aliases: tuple[str, ...]
     transaction_month_offset: int
-    accepts_yenless_amount: bool = False
 
 
 SERVICES = (
@@ -42,7 +41,6 @@ SERVICES = (
         portal_url="https://mypage.commufa.jp/join/s/",
         partner_aliases=("中部テレコミュニケーション株式会社",),
         transaction_month_offset=1,
-        accepts_yenless_amount=True,
     ),
     ServiceDefinition(
         id="tokuten",

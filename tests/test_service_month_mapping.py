@@ -83,10 +83,10 @@ class ServiceMonthMappingTest(unittest.TestCase):
 
     def test_real_drive_samples_are_stored_for_their_usage_months(self) -> None:
         samples = {
-            "epos": ("20260605_株式会社エポスカード_87560円.pdf", "2026-07"),
-            "commufa": ("20260611_中部テレコミュニケーション株式会社_6710.pdf", "2026-05"),
-            "tokuten": ("20260621_フラットエナジー株式会社_7515円.pdf", "2026-05"),
-            "mobile": ("20260609_NTTファイナンス株式会社_4882円.pdf", "2026-06"),
+            "epos": ("20260605_株式会社エポスカード_10001円.pdf", "2026-07"),
+            "commufa": ("20260611_中部テレコミュニケーション株式会社_10002円.pdf", "2026-05"),
+            "tokuten": ("20260621_フラットエナジー株式会社_10003円.pdf", "2026-05"),
+            "mobile": ("20260609_NTTファイナンス株式会社_10004円.pdf", "2026-06"),
         }
 
         for service_id, (file_name, usage_month) in samples.items():
@@ -104,10 +104,10 @@ class ServiceMonthMappingTest(unittest.TestCase):
 
     def test_real_drive_samples_do_not_match_a_different_usage_month(self) -> None:
         cases = {
-            "epos": ("20260605_株式会社エポスカード_87560円.pdf", "2026-06"),
-            "commufa": ("20260611_中部テレコミュニケーション株式会社_6710.pdf", "2026-06"),
-            "tokuten": ("20260621_フラットエナジー株式会社_7515円.pdf", "2026-06"),
-            "mobile": ("20260609_NTTファイナンス株式会社_4882円.pdf", "2026-05"),
+            "epos": ("20260605_株式会社エポスカード_10001円.pdf", "2026-06"),
+            "commufa": ("20260611_中部テレコミュニケーション株式会社_10002円.pdf", "2026-06"),
+            "tokuten": ("20260621_フラットエナジー株式会社_10003円.pdf", "2026-06"),
+            "mobile": ("20260609_NTTファイナンス株式会社_10004円.pdf", "2026-05"),
         }
 
         for service_id, (file_name, wrong_usage_month) in cases.items():
