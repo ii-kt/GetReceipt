@@ -24,6 +24,7 @@ from src.config import (
 )
 from src.storage.drive_storage import DriveStorage
 from src.ui import styles as ui_styles
+from src.ui.module_contract import ensure_ui_module
 from src.workflows.auto_acquisition import run_auto_acquisition
 from src.workflows.drive_status import StoredReceipt, find_receipt
 from src.workflows.receipt_archive import (
@@ -42,6 +43,26 @@ NOTICE_KEY = "getreceipt_notice"
 LOGGER = logging.getLogger(__name__)
 MONTHLY_VIEW = "毎月の4件"
 ARCHIVE_VIEW = "単発領収書"
+EXPECTED_UI_API_VERSION = 2
+REQUIRED_UI_CALLABLES = (
+    "inject_design",
+    "render_compact_header",
+    "render_month_hero",
+    "render_progress",
+    "render_service_card",
+    "render_fatal_notice",
+    "render_archive_hero",
+    "render_archive_section",
+    "render_one_off_receipt_card",
+    "render_archive_empty",
+    "render_review_file",
+)
+
+ui_styles = ensure_ui_module(
+    ui_styles,
+    expected_version=EXPECTED_UI_API_VERSION,
+    required_callables=REQUIRED_UI_CALLABLES,
+)
 
 
 st.set_page_config(

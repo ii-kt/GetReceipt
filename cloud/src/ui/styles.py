@@ -5,6 +5,9 @@ from html import escape
 import streamlit as st
 
 
+UI_API_VERSION = 2
+
+
 _STATUS = {
     "saved": ("Drive確認済み", "check"),
     "missing": ("未取得", "missing"),
@@ -121,6 +124,11 @@ def inject_design() -> None:
         }
 
         .gr-sync a {
+          display: inline-flex;
+          align-items: center;
+          min-height: 44px;
+          margin: -6px -8px -6px 0;
+          padding: 6px 8px;
           color: inherit !important;
           text-decoration: none !important;
         }
@@ -724,7 +732,10 @@ def inject_design() -> None:
         }
 
         @media (max-width: 640px) {
-          .block-container { padding: 18px 15px 42px !important; }
+          .block-container {
+            padding: 18px 15px calc(92px + env(safe-area-inset-bottom)) !important;
+          }
+          [data-testid="stTextInput"] input { font-size: 16px !important; }
           [data-testid="stHorizontalBlock"] { flex-wrap: wrap; gap: 8px !important; }
           [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
             flex: 1 1 100% !important;
@@ -745,7 +756,12 @@ def inject_design() -> None:
             padding: 15px;
             border-radius: 17px;
           }
-          .gr-oneoff__file { max-width: 100%; white-space: normal; }
+          .gr-oneoff__file {
+            max-width: 100%;
+            overflow-wrap: anywhere;
+            white-space: normal;
+            word-break: break-word;
+          }
           .gr-oneoff__side { align-items: flex-start; }
           .gr-oneoff__amount { max-width: 100%; text-align: left; }
           .gr-oneoff__badges { justify-content: flex-start; }

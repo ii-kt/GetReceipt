@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import sys
 import unittest
 from pathlib import Path
@@ -14,6 +15,7 @@ if str(CLOUD) not in sys.path:
 
 from src.storage.drive_storage import DriveStorage
 from src.config import expected_transaction_month, service_by_id
+from src.ui import styles as ui_styles_module
 
 
 class FakeDriveStorage:
@@ -155,6 +157,24 @@ class StreamlitAppTest(unittest.TestCase):
         self.assertNotIn("NTTファイナンス株式会社", archive_markdown)
         self.assertNotIn("電子取引データに関する事務処理規程", archive_markdown)
         self.assertFalse(any("自動取得" in button.label for button in app.button))
+
+    def test_stale_cached_ui_module_is_reloaded_before_archive_render(self) -> None:
+        files = [
+            drive_file("20260708_交通サービス_500円.pdf", file_id="transport"),
+        ]
+        app = self.app()
+        ui_styles_module.UI_API_VERSION = 1
+        delattr(ui_styles_module, "render_archive_hero")
+        try:
+            with patch.object(DriveStorage, "from_secrets", return_value=FakeDriveStorage(files)):
+                app.run(timeout=20)
+                app.segmented_control[0].set_value("単発領収書").run(timeout=20)
+        finally:
+            importlib.reload(ui_styles_module)
+
+        self.assertEqual([], list(app.exception))
+        markdown = "\n".join(item.value for item in app.markdown)
+        self.assertIn("交通サービス", markdown)
 
     def test_archive_filters_month_currency_refund_and_search_together(self) -> None:
         files = [
