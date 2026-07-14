@@ -9,7 +9,7 @@ from typing import Any
 import requests
 
 from .browser_session import ManagedBrowser
-from ..config import parse_month_key, service_by_id
+from ..config import expected_transaction_month, parse_month_key, service_by_id
 
 
 class AcquisitionError(RuntimeError):
@@ -217,7 +217,8 @@ class EposAutoFetcher:
         return self.browser.page_summary()
 
     def fetch_pdf(self, target_month: str) -> FetchedStatement:
-        year, month = parse_month_key(target_month)
+        payment_month = expected_transaction_month(self.service.id, target_month)
+        year, month = parse_month_key(payment_month)
         self.browser.navigate(self.service.portal_url, wait_seconds=1.0)
         self._wait_for_login()
 
@@ -241,7 +242,7 @@ class EposAutoFetcher:
         return FetchedStatement(
             content=content,
             source_url=form["pageUrl"],
-            original_file_name=f"epos_{target_month}.pdf",
+            original_file_name=f"epos_{payment_month}.pdf",
             metadata_text=form["metadataText"],
             logs=tuple(form.get("logs") or ()),
         )

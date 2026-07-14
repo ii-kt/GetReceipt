@@ -66,17 +66,18 @@ class DriveTruthContractTest(unittest.TestCase):
 
     def test_canonical_drive_file_name_is_the_saved_receipt_contract(self) -> None:
         canonical_names = {
-            "epos": "20260701_株式会社エポスカード_8250円.pdf",
-            "commufa": "20260702_中部テレコミュニケーション株式会社_5720円.pdf",
-            "tokuten": "20260703_フラットエナジー株式会社_4100円.pdf",
-            "mobile": "20260704_NTTファイナンス株式会社_5500円.pdf",
+            "epos": ("20260701_株式会社エポスカード_8250円.pdf", "2026-08"),
+            "commufa": ("20260702_中部テレコミュニケーション株式会社_5720円.pdf", "2026-06"),
+            "tokuten": ("20260703_フラットエナジー株式会社_4100円.pdf", "2026-06"),
+            "mobile": ("20260704_NTTファイナンス株式会社_5500円.pdf", "2026-07"),
         }
 
-        for service_id, file_name in canonical_names.items():
-            with self.subTest(service_id=service_id, file_name=file_name):
+        for service_id, (file_name, usage_month) in canonical_names.items():
+            with self.subTest(service_id=service_id, file_name=file_name, usage_month=usage_month):
                 self.assert_stored(
                     service_id=service_id,
                     file=drive_file(file_name),
+                    target_month=usage_month,
                 )
 
     def test_mobile_accepts_legacy_ntt_docomo_issuer_name(self) -> None:
@@ -87,27 +88,29 @@ class DriveTruthContractTest(unittest.TestCase):
 
     def test_real_drive_filename_samples_match_all_four_recurring_services(self) -> None:
         samples = {
-            "epos": "20260605_株式会社エポスカード_87560円.pdf",
-            "commufa": "20260611_中部テレコミュニケーション株式会社_6710.pdf",
-            "tokuten": "20260621_フラットエナジー株式会社_7515円.pdf",
-            "mobile": "20260609_NTTファイナンス株式会社_4882円.pdf",
+            "epos": ("20260605_株式会社エポスカード_87560円.pdf", "2026-07"),
+            "commufa": ("20260611_中部テレコミュニケーション株式会社_6710.pdf", "2026-05"),
+            "tokuten": ("20260621_フラットエナジー株式会社_7515円.pdf", "2026-05"),
+            "mobile": ("20260609_NTTファイナンス株式会社_4882円.pdf", "2026-06"),
         }
-        for service_id, file_name in samples.items():
-            with self.subTest(service_id=service_id):
+        for service_id, (file_name, usage_month) in samples.items():
+            with self.subTest(service_id=service_id, usage_month=usage_month):
                 self.assert_stored(
                     service_id=service_id,
                     file=drive_file(file_name),
-                    target_month="2026-06",
+                    target_month=usage_month,
                 )
 
     def test_yenless_amount_is_only_accepted_for_commufa_legacy_files(self) -> None:
         self.assert_stored(
             service_id="commufa",
             file=drive_file("20260711_中部テレコミュニケーション株式会社_6710.pdf"),
+            target_month="2026-06",
         )
         self.assert_missing(
             service_id="epos",
             file=drive_file("20260705_株式会社エポスカード_87560.pdf"),
+            target_month="2026-08",
         )
 
     def test_octet_stream_is_accepted_when_pdf_extension_and_name_are_valid(self) -> None:
@@ -117,6 +120,7 @@ class DriveTruthContractTest(unittest.TestCase):
                 "20260701_株式会社エポスカード_8250円.pdf",
                 mime_type="application/octet-stream",
             ),
+            target_month="2026-08",
         )
 
     def test_zero_byte_drive_file_is_not_saved_receipt_evidence(self) -> None:
@@ -128,6 +132,7 @@ class DriveTruthContractTest(unittest.TestCase):
                         "20260701_株式会社エポスカード_8250円.pdf",
                         size=zero_size,
                     ),
+                    target_month="2026-08",
                 )
 
     def test_non_amount_suffix_is_not_saved_receipt_evidence(self) -> None:
@@ -146,12 +151,13 @@ class DriveTruthContractTest(unittest.TestCase):
                 self.assert_missing(
                     service_id="epos",
                     file=drive_file(file_name),
+                    target_month="2026-08",
                 )
 
     def test_missing_size_is_not_saved_receipt_evidence(self) -> None:
         file = drive_file("20260701_株式会社エポスカード_8250円.pdf")
         file.pop("size")
-        self.assert_missing(service_id="epos", file=file)
+        self.assert_missing(service_id="epos", file=file, target_month="2026-08")
 
     def test_selectable_months_follow_tokyo_local_month_boundary(self) -> None:
         # ``today`` is the application-facing Tokyo local date.  The selectable

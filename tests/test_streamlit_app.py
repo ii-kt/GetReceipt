@@ -13,7 +13,7 @@ if str(CLOUD) not in sys.path:
     sys.path.insert(0, str(CLOUD))
 
 from src.storage.drive_storage import DriveStorage
-from src.config import service_by_id
+from src.config import expected_transaction_month, service_by_id
 
 
 class FakeDriveStorage:
@@ -65,9 +65,9 @@ class StreamlitAppTest(unittest.TestCase):
 
     def test_drive_files_are_the_only_saved_status_source(self) -> None:
         files = [
-            receipt_file("20260705", "株式会社エポスカード", 87560),
-            receipt_file("20260711", "中部テレコミュニケーション株式会社", 6710),
-            receipt_file("20260712", "フラットエナジー株式会社", 7515),
+            receipt_file("20260605", "株式会社エポスカード", 87560),
+            receipt_file("20260811", "中部テレコミュニケーション株式会社", 6710),
+            receipt_file("20260812", "フラットエナジー株式会社", 7515),
         ]
         app = self.app()
         with patch.object(DriveStorage, "from_secrets", return_value=FakeDriveStorage(files)):
@@ -81,9 +81,9 @@ class StreamlitAppTest(unittest.TestCase):
 
     def test_all_four_drive_files_remove_acquisition_button(self) -> None:
         files = [
-            receipt_file("20260705", "株式会社エポスカード", 87560),
-            receipt_file("20260711", "中部テレコミュニケーション株式会社", 6710),
-            receipt_file("20260712", "フラットエナジー株式会社", 7515),
+            receipt_file("20260605", "株式会社エポスカード", 87560),
+            receipt_file("20260811", "中部テレコミュニケーション株式会社", 6710),
+            receipt_file("20260812", "フラットエナジー株式会社", 7515),
             receipt_file("20260709", "NTTファイナンス株式会社", 4882),
         ]
         app = self.app()
@@ -97,8 +97,8 @@ class StreamlitAppTest(unittest.TestCase):
 
     def test_single_button_acquires_each_missing_service_and_finishes(self) -> None:
         files = [
-            receipt_file("20260705", "株式会社エポスカード", 87560),
-            receipt_file("20260711", "中部テレコミュニケーション株式会社", 6710),
+            receipt_file("20260605", "株式会社エポスカード", 87560),
+            receipt_file("20260811", "中部テレコミュニケーション株式会社", 6710),
         ]
         storage = FakeDriveStorage(files)
         acquired: list[str] = []
@@ -107,8 +107,9 @@ class StreamlitAppTest(unittest.TestCase):
             service_id = kwargs["service_id"]
             target_month = kwargs["target_month"]
             acquired.append(service_id)
+            transaction_month = expected_transaction_month(service_id, target_month)
             file = receipt_file(
-                f"{target_month.replace('-', '')}01",
+                f"{transaction_month.replace('-', '')}01",
                 service_by_id(service_id).default_partner,
                 5000 + len(acquired),
             )

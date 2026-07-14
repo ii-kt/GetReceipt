@@ -29,13 +29,13 @@ class DriveStatusTest(unittest.TestCase):
             }
         ]
 
-        receipt = find_receipt(files, service_by_id("epos"), "2026-07")
+        receipt = find_receipt(files, service_by_id("epos"), "2026-08")
 
         self.assertIsNotNone(receipt)
         assert receipt is not None
         self.assertEqual(receipt.file_id, "drive-1")
         self.assertEqual(receipt.size, 1234)
-        self.assertEqual(receipt_month_state(files, service_by_id("epos"), "2026-07"), ReceiptMonthState.STORED)
+        self.assertEqual(receipt_month_state(files, service_by_id("epos"), "2026-08"), ReceiptMonthState.STORED)
 
     def test_find_receipt_normalizes_full_width_and_spacing(self) -> None:
         files = [
@@ -47,7 +47,7 @@ class DriveStatusTest(unittest.TestCase):
             }
         ]
 
-        receipt = find_receipt(files, service_by_id("epos"), "2026-07")
+        receipt = find_receipt(files, service_by_id("epos"), "2026-08")
 
         self.assertIsNotNone(receipt)
 
@@ -79,9 +79,9 @@ class DriveStatusTest(unittest.TestCase):
             {"id": "wrong-format", "name": "202607_株式会社エポスカード_8250円.pdf", "mimeType": "application/pdf"},
         ]
 
-        self.assertIsNone(find_receipt(files, service_by_id("epos"), "2026-07"))
+        self.assertIsNone(find_receipt(files, service_by_id("epos"), "2026-08"))
         self.assertEqual(
-            receipt_month_state(files, service_by_id("epos"), "2026-07"),
+            receipt_month_state(files, service_by_id("epos"), "2026-08"),
             ReceiptMonthState.MISSING,
         )
 

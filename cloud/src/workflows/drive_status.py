@@ -7,7 +7,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Mapping
 
-from ..config import ServiceDefinition, parse_month_key
+from ..config import ServiceDefinition, expected_transaction_month, parse_month_key
 
 
 PDF_MIME_TYPE = "application/pdf"
@@ -37,14 +37,16 @@ def find_receipt(
     service: ServiceDefinition,
     target_month: str,
 ) -> StoredReceipt | None:
-    """Return the newest valid Drive PDF matching a service and target month.
+    """Return the newest valid Drive PDF for a service usage month.
 
-    The folder listing and the canonical filename are the source of truth. MIME
-    metadata is deliberately not used because older Drive uploads can be stored
-    as ``application/octet-stream`` even when their filename is a PDF.
+    ``target_month`` is always the usage month. The service-specific transaction
+    month is derived before matching the filename date. The folder listing and
+    canonical filename are the source of truth; MIME metadata is deliberately
+    ignored because older PDFs may be stored as ``application/octet-stream``.
     """
 
-    month_prefix = _month_prefix(target_month)
+    transaction_month = expected_transaction_month(service.id, target_month)
+    month_prefix = _month_prefix(transaction_month)
     aliases = {
         _normalize_partner(alias)
         for alias in (service.default_partner, *service.partner_aliases)

@@ -16,6 +16,7 @@ from src.config import (
     DATA_DIR,
     RECEIPT_DRIVE_FOLDER_URL,
     SERVICES,
+    expected_transaction_month,
     month_label,
     selectable_months,
     service_by_id,
@@ -95,10 +96,12 @@ def render_service_rows(
 
     for service in SERVICES:
         receipt = receipts[service.id]
+        transaction_month = expected_transaction_month(service.id, target_month)
+        transaction_label = month_label(transaction_month).removesuffix("分")
         failure = failure_for(service.id, target_month) if receipt is None else None
         if receipt is not None:
             status = "saved"
-            detail = "Google DriveでPDFを確認済み"
+            detail = f"{transaction_label}の取引PDFをDriveで確認済み"
         elif service.id == current_service:
             status = "running"
             detail = "自動取得を実行中"
@@ -110,7 +113,7 @@ def render_service_rows(
             detail = failure.get("message", "自動取得に失敗しました。")
         else:
             status = "missing"
-            detail = "該当するPDFはDriveにありません"
+            detail = f"{transaction_label}の取引PDFはDriveにありません"
 
         ui_styles.render_service_card(
             label=service.label,

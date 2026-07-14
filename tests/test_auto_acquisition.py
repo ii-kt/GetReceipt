@@ -85,7 +85,7 @@ class AutoAcquisitionTest(unittest.TestCase):
         self.assertEqual(storage.list_calls, 3)
         self.assertEqual(len(storage.upserts), 1)
         self.assertEqual(storage.upserts[0]["mime_type"], "application/pdf")
-        self.assertTrue(storage.upserts[0]["file_name"].startswith("20260718_中部テレコミュニケーション株式会社_"))
+        self.assertTrue(storage.upserts[0]["file_name"].startswith("20260801_中部テレコミュニケーション株式会社_"))
         self.assertEqual(result.file_name, storage.upserts[0]["file_name"])
         self.assertEqual(result.stage, Stage.COMPLETED)
 
@@ -94,7 +94,7 @@ class AutoAcquisitionTest(unittest.TestCase):
         storage = FakeStorage([
             {
                 "id": "existing-id",
-                "name": "20260701_中部テレコミュニケーション株式会社_8250円.pdf",
+                "name": "20260801_中部テレコミュニケーション株式会社_8250円.pdf",
                 "webViewLink": "https://drive.test/existing-id",
                 "mimeType": "application/pdf",
                 "size": "1024",
@@ -110,7 +110,7 @@ class AutoAcquisitionTest(unittest.TestCase):
 
         self.assertEqual(result.outcome, AcquisitionOutcome.ALREADY_EXISTS)
         self.assertTrue(result.skipped)
-        self.assertEqual(result.file_name, "20260701_中部テレコミュニケーション株式会社_8250円.pdf")
+        self.assertEqual(result.file_name, "20260801_中部テレコミュニケーション株式会社_8250円.pdf")
         self.assertEqual(fetcher.calls, [])
         self.assertEqual(storage.upserts, [])
         self.assertEqual(storage.list_calls, 1)
@@ -155,7 +155,7 @@ class AutoAcquisitionTest(unittest.TestCase):
         storage = FakeStorage()
         existing = {
             "id": "concurrent-id",
-            "name": "20260701_中部テレコミュニケーション株式会社_8250円.pdf",
+            "name": "20260801_中部テレコミュニケーション株式会社_8250円.pdf",
             "webViewLink": "https://drive.test/concurrent-id",
             "mimeType": "application/pdf",
             "size": "1024",

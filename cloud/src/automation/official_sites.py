@@ -10,7 +10,7 @@ from typing import Any
 
 from .browser_session import ManagedBrowser
 from .epos import AcquisitionError, FetchedStatement
-from ..config import DATA_DIR, parse_month_key, service_by_id, shift_month
+from ..config import DATA_DIR, expected_transaction_month, parse_month_key, service_by_id
 from ..domain.document_metadata import extract_pdf_text
 
 
@@ -50,16 +50,9 @@ SERVICE_AUTOMATION_CONFIGS: dict[str, ServiceAutomationConfig] = {
 }
 
 
-def target_lookup_month(service_id: str, target_month: str) -> str:
-    year, month = parse_month_key(target_month)
-    if service_id == "tokuten":
-        year, month = shift_month(year, month, 1)
-    return f"{year:04d}-{month:02d}"
-
-
 def build_tokuten_search_query(target_month: str, config: ServiceAutomationConfig | None = None) -> str:
     config = config or SERVICE_AUTOMATION_CONFIGS["tokuten"]
-    year, month = parse_month_key(target_lookup_month("tokuten", target_month))
+    year, month = parse_month_key(expected_transaction_month("tokuten", target_month))
     return (
         config.mail_search_query_template
         .replace("{year}", str(year))
@@ -314,7 +307,7 @@ class TokutenAutoFetcher:
         return self.browser.page_summary()
 
     def fetch_pdf(self, target_month: str) -> FetchedStatement:
-        lookup_month = target_lookup_month("tokuten", target_month)
+        lookup_month = expected_transaction_month(self.service.id, target_month)
         year, month = parse_month_key(lookup_month)
         self.browser.clear_downloads()
         self.browser.navigate(self.config.target_url, wait_seconds=2.0)

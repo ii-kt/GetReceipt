@@ -4,7 +4,7 @@ from collections.abc import Callable
 from threading import Lock
 from typing import Any, Protocol
 
-from ..config import parse_month_key, service_by_id
+from ..config import expected_transaction_month, parse_month_key, service_by_id
 from ..domain.acquisition import (
     AcquisitionFailure,
     AcquisitionOutcome,
@@ -67,11 +67,12 @@ def _run_auto_acquisition_unlocked(
     on_progress: ProgressCallback | None = None,
     receipt_finder: ReceiptFinder | None = None,
 ) -> AcquisitionResult:
-    """Acquire and persist one service/month using Drive as the only truth.
+    """Acquire and persist one service usage month using Drive as the only truth.
 
-    Google Drive is the source of truth.  An existing matching PDF short-circuits
-    the provider call, and a save is successful only after a fresh Drive listing
-    can find the expected service/month receipt.
+    ``target_month`` remains the usage month across the workflow. Drive matching
+    and filename dates use the service-specific transaction month. An existing
+    matching PDF short-circuits the provider call, and a save is successful only
+    after a fresh Drive listing can find the expected receipt.
     """
 
     events: list[ProgressEvent] = []
@@ -231,7 +232,10 @@ def _receipt_metadata(
         raise ValueError("取得したPDFから請求金額を読み取れませんでした。")
 
     return ReceiptMetadata(
-        transaction_date=date_in_target_month(target_month, extracted.transaction_date),
+        transaction_date=date_in_target_month(
+            expected_transaction_month(service.id, target_month),
+            extracted.transaction_date,
+        ),
         partner_name=service.default_partner,
         amount_yen=extracted.amount_yen,
     )

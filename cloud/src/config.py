@@ -22,6 +22,7 @@ class ServiceDefinition:
     default_partner: str
     portal_url: str
     partner_aliases: tuple[str, ...]
+    transaction_month_offset: int
     accepts_yenless_amount: bool = False
 
 
@@ -32,6 +33,7 @@ SERVICES = (
         default_partner="株式会社エポスカード",
         portal_url="https://www.eposcard.co.jp/memberservice/pc/nocardusedetail/menu_preload.do",
         partner_aliases=("株式会社エポスカード",),
+        transaction_month_offset=-1,
     ),
     ServiceDefinition(
         id="commufa",
@@ -39,6 +41,7 @@ SERVICES = (
         default_partner="中部テレコミュニケーション株式会社",
         portal_url="https://mypage.commufa.jp/join/s/",
         partner_aliases=("中部テレコミュニケーション株式会社",),
+        transaction_month_offset=1,
         accepts_yenless_amount=True,
     ),
     ServiceDefinition(
@@ -47,6 +50,7 @@ SERVICES = (
         default_partner="フラットエナジー株式会社",
         portal_url="https://outlook.live.com/mail/0/",
         partner_aliases=("フラットエナジー株式会社",),
+        transaction_month_offset=1,
     ),
     ServiceDefinition(
         id="mobile",
@@ -58,6 +62,7 @@ SERVICES = (
             "株式会社NTTファイナンス",
             "株式会社NTTドコモ",
         ),
+        transaction_month_offset=0,
     ),
 )
 
@@ -90,6 +95,24 @@ def parse_month_key(value: str) -> tuple[int, int]:
 def shift_month(year: int, month: int, delta: int) -> tuple[int, int]:
     index = year * 12 + (month - 1) + delta
     return index // 12, index % 12 + 1
+
+
+def expected_transaction_month(service_id: str, usage_month: str) -> str:
+    """Map a service usage month to the month encoded in its Drive filename."""
+
+    service = service_by_id(service_id)
+    year, month = parse_month_key(usage_month)
+    year, month = shift_month(year, month, service.transaction_month_offset)
+    return month_key(year, month)
+
+
+def usage_month_for_transaction(service_id: str, transaction_month: str) -> str:
+    """Map a Drive transaction month back to the service usage month."""
+
+    service = service_by_id(service_id)
+    year, month = parse_month_key(transaction_month)
+    year, month = shift_month(year, month, -service.transaction_month_offset)
+    return month_key(year, month)
 
 
 def selectable_months(today: date | None = None) -> list[str]:
