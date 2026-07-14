@@ -438,44 +438,18 @@ def render_archive_view(drive_files: list[dict[str, str]], drive_error: str) -> 
         placeholder="請求元・金額・ファイル名",
         key="archive_query",
     )
-    currency_codes = sorted(
-        {_currency_code(receipt.currency) for receipt in all_receipts},
-        key=lambda code: ({"JPY": 0, "USD": 1, "EUR": 2, "GBP": 3}.get(code, 9), code),
+    month_filter = st.selectbox(
+        "取引月",
+        ("", *archive_months(all_receipts)),
+        format_func=lambda value: (
+            "すべての取引月" if not value else month_label(value).removesuffix("分")
+        ),
+        key="archive_month",
     )
-    filter_columns = st.columns(3, gap="small")
-    with filter_columns[0]:
-        month_filter = st.selectbox(
-            "取引月",
-            ("", *archive_months(all_receipts)),
-            format_func=lambda value: (
-                "すべての取引月" if not value else month_label(value).removesuffix("分")
-            ),
-            key="archive_month",
-        )
-    with filter_columns[1]:
-        currency_filter = st.selectbox(
-            "通貨",
-            ("", *currency_codes),
-            format_func=lambda value: "すべての通貨" if not value else _currency_label(value),
-            key="archive_currency",
-        )
-    with filter_columns[2]:
-        refund_filter = st.selectbox(
-            "取引種別",
-            ("", "standard", "refund"),
-            format_func=lambda value: {
-                "": "通常・返金すべて",
-                "standard": "通常",
-                "refund": "返金あり",
-            }[value],
-            key="archive_refund",
-        )
     visible_receipts = filter_receipts(
         all_receipts,
         query=query,
         month=month_filter,
-        currency=currency_filter,
-        refund=refund_filter,
     )
     visible_refunds = sum(receipt.is_refund for receipt in visible_receipts)
     ui_styles.render_archive_hero(

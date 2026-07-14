@@ -176,10 +176,10 @@ class StreamlitAppTest(unittest.TestCase):
         markdown = "\n".join(item.value for item in app.markdown)
         self.assertIn("交通サービス", markdown)
 
-    def test_archive_filters_month_currency_refund_and_search_together(self) -> None:
+    def test_archive_filters_only_by_month_and_search(self) -> None:
         files = [
             drive_file("20260530_Anthropic_$10-$10.pdf", file_id="anthropic-refund"),
-            drive_file("20260530_OpenAI_1000円-1000円.pdf", file_id="openai-refund"),
+            drive_file("20260530_OpenAI_1000円.pdf", file_id="openai-standard"),
             drive_file("20260615_OpenAI_$8.pdf", file_id="openai-june"),
             drive_file("20260708_交通サービス_500円.pdf", file_id="transport"),
         ]
@@ -188,25 +188,22 @@ class StreamlitAppTest(unittest.TestCase):
             app.run(timeout=20)
             app.segmented_control[0].set_value("単発領収書").run(timeout=20)
 
+            self.assertEqual(["取引月"], [selectbox.label for selectbox in app.selectbox])
             app.selectbox[0].set_value("2026-05").run(timeout=20)
             markdown = "\n".join(item.value for item in app.markdown)
             self.assertIn("Anthropic", markdown)
             self.assertIn("OpenAI", markdown)
             self.assertNotIn("交通サービス", markdown)
 
-            app.selectbox[1].set_value("USD").run(timeout=20)
-            markdown = "\n".join(item.value for item in app.markdown)
-            self.assertIn("Anthropic", markdown)
-            self.assertNotIn("1000円-1000円", markdown)
-
-            app.selectbox[2].set_value("refund").run(timeout=20)
             app.text_input[0].set_value("anthropic").run(timeout=20)
 
         self.assertEqual([], list(app.exception))
         markdown = "\n".join(item.value for item in app.markdown)
         self.assertIn("<strong>1</strong><span>/ 4 件を表示</span>", markdown)
         self.assertIn("20260530_Anthropic_$10-$10.pdf", markdown)
-        self.assertNotIn("20260530_OpenAI_1000円-1000円.pdf", markdown)
+        self.assertIn("USD / $", markdown)
+        self.assertIn("返金あり", markdown)
+        self.assertNotIn("20260530_OpenAI_1000円.pdf", markdown)
         self.assertNotIn("20260615_OpenAI_$8.pdf", markdown)
         self.assertNotIn("20260708_交通サービス_500円.pdf", markdown)
         self.assertFalse(any("自動取得" in button.label for button in app.button))
