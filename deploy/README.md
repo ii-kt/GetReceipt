@@ -84,7 +84,12 @@ redirect URIが同じ影響範囲になります。本番では分離を既定�
 
 ## 4. VMを準備する
 
-VM上で`deploy/`を所有者だけが読めるディレクトリへ配置します。暗号化永続ディスク上のデータ領域を
+新規VMでは、作成時に[`deploy/cloud-init.yaml`](cloud-init.yaml)をcloud-init / user-dataへ
+貼り付けると、Docker Engine + Composeの導入、`/opt/getreceipt`への配備用checkout、
+UID 10001所有の`/srv/getreceipt/data`作成までが自動で完了します。その場合は
+`/opt/getreceipt/deploy`で以降の手順を続けます。
+
+手動で準備する場合は、VM上で`deploy/`を所有者だけが読めるディレクトリへ配置します。暗号化永続ディスク上のデータ領域を
 作り、コンテナ内ユーザーUID 10001だけが書けるようにします。
 
 ```sh
