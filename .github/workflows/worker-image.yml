@@ -80,7 +80,7 @@ jobs:
             --env WORKER_DOMAIN=receipt-worker.example.com \
             --volume "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" \
             caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648 \
-            validate --config /etc/caddy/Caddyfile --adapter caddyfile
+            caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 
       - name: Build Google Chrome worker for smoke test
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
