@@ -687,6 +687,13 @@
 		},
 		{
 			"names": [
+				"chroot"
+			],
+			"action": "SCMP_ACT_ALLOW",
+			"comment": "GetReceipt: the Chrome zygote chroots to drop filesystem access inside its own user namespace, where the kernel still requires CAP_SYS_CHROOT of that namespace. The container itself keeps no capabilities."
+		},
+		{
+			"names": [
 				"reboot"
 			],
 			"action": "SCMP_ACT_ALLOW",
