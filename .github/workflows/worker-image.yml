@@ -101,10 +101,17 @@ jobs:
           if ! chrome_smoke_json="$(docker run --rm --cap-drop ALL --shm-size=1g \
             getreceipt-worker:smoke \
             python /app/scripts/verify_chrome_worker.py)"; then
-            echo "::group::Chrome discovery diagnostics"
-            docker run --rm getreceipt-worker:smoke sh -c \
-              'env | grep -E "BROWSER|CHROME|PATH"; ls -la /usr/bin/google-chrome* /opt/google/chrome 2>&1 | head -20; readlink -f /usr/bin/google-chrome 2>&1; id' \
-              || true
+            echo "::group::Chrome launch diagnostics"
+            probe='timeout 25 google-chrome --headless=new --disable-gpu --no-first-run --user-data-dir=/tmp/probe --dump-dom about:blank >/dev/null 2>/tmp/err; code=$?; echo "exit=$code"; tail -6 /tmp/err'
+            echo "--- default confinement"
+            docker run --rm --cap-drop ALL --shm-size=1g \
+              getreceipt-worker:smoke sh -c "$probe" || true
+            echo "--- seccomp=unconfined"
+            docker run --rm --cap-drop ALL --security-opt seccomp=unconfined --shm-size=1g \
+              getreceipt-worker:smoke sh -c "$probe" || true
+            echo "--- apparmor=unconfined"
+            docker run --rm --cap-drop ALL --security-opt apparmor=unconfined --shm-size=1g \
+              getreceipt-worker:smoke sh -c "$probe" || true
             echo "::endgroup::"
             exit 1
           fi
