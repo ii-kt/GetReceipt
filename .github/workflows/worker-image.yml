@@ -105,19 +105,17 @@ jobs:
             getreceipt-worker:smoke \
             python /app/scripts/verify_chrome_worker.py)"; then
             echo "::group::Chrome launch diagnostics"
-            probe='unshare -U true; echo "unshare-userns=$?"; timeout 25 google-chrome --headless=new --disable-gpu --no-first-run --user-data-dir=/tmp/probe --dump-dom about:blank >/dev/null 2>/tmp/err; code=$?; echo "exit=$code"; tail -8 /tmp/err'
-            echo "--- custom seccomp-chrome profile"
+            probe='timeout 25 google-chrome --headless=new --disable-gpu --no-first-run --enable-logging=stderr --v=1 --user-data-dir=/tmp/probe --dump-dom about:blank >/dev/null 2>/tmp/err; code=$?; echo "exit=$code"; grep -iE "sandbox|zygote|fatal|denied|permitted|namespace" /tmp/err | tail -15'
+            echo "--- custom profile, verbose"
             docker run --rm --cap-drop ALL --shm-size=1g \
               --security-opt "seccomp=$PWD/deploy/seccomp-chrome.json" \
               getreceipt-worker:smoke sh -c "$probe" || true
-            echo "--- default confinement"
-            docker run --rm --cap-drop ALL --shm-size=1g \
+            echo "--- default profile + CAP_SYS_ADMIN"
+            docker run --rm --cap-drop ALL --cap-add SYS_ADMIN --shm-size=1g \
               getreceipt-worker:smoke sh -c "$probe" || true
-            echo "--- seccomp=unconfined"
-            docker run --rm --cap-drop ALL --security-opt seccomp=unconfined --shm-size=1g \
-              getreceipt-worker:smoke sh -c "$probe" || true
-            echo "--- apparmor=unconfined"
-            docker run --rm --cap-drop ALL --security-opt apparmor=unconfined --shm-size=1g \
+            echo "--- custom profile + CAP_SYS_CHROOT"
+            docker run --rm --cap-drop ALL --cap-add SYS_CHROOT --shm-size=1g \
+              --security-opt "seccomp=$PWD/deploy/seccomp-chrome.json" \
               getreceipt-worker:smoke sh -c "$probe" || true
             echo "::endgroup::"
             exit 1
