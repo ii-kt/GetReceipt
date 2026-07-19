@@ -142,6 +142,10 @@ VMのroot権限またはDocker管理権限を持つ利用者はコンテナ環�
 
 ## 5. ワーカーを起動する
 
+Composeは[`deploy/seccomp-chrome.json`](seccomp-chrome.json)を適用します。これはDocker既定の
+seccompプロファイルに、Google Chromeサンドボックスが必要とする非特権USER/PID/NET/NS
+ネームスペース作成だけを追加したものです。`seccomp=unconfined`へ置き換えないでください。
+
 `deploy/`ディレクトリで実行します。
 
 ```sh

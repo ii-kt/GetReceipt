@@ -20,6 +20,12 @@ services:
     shm_size: "1gb"
     cap_drop:
       - ALL
+    # Docker's default seccomp profile denies the unprivileged user-namespace
+    # clone that the Google Chrome zygote sandbox requires. This profile is the
+    # default plus USER/PID/NET/NS namespace creation only; it must not be
+    # replaced with "unconfined".
+    security_opt:
+      - seccomp:./seccomp-chrome.json
     pids_limit: 512
     # Allows the worker to stop acquisition and publish its final verified
     # SQLite snapshot before the container is killed.

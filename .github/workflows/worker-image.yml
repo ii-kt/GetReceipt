@@ -11,6 +11,7 @@ on:
       - ".dockerignore"
       - "deploy/compose.yaml"
       - "deploy/Caddyfile"
+      - "deploy/seccomp-chrome.json"
       - "deploy/host.env.example"
       - "deploy/worker.env.example"
       - ".github/workflows/worker-image.yml"
@@ -25,6 +26,7 @@ on:
       - ".dockerignore"
       - "deploy/compose.yaml"
       - "deploy/Caddyfile"
+      - "deploy/seccomp-chrome.json"
       - "deploy/host.env.example"
       - "deploy/worker.env.example"
       - ".github/workflows/worker-image.yml"
@@ -99,6 +101,7 @@ jobs:
         shell: bash
         run: |
           if ! chrome_smoke_json="$(docker run --rm --cap-drop ALL --shm-size=1g \
+            --security-opt "seccomp=$PWD/deploy/seccomp-chrome.json" \
             getreceipt-worker:smoke \
             python /app/scripts/verify_chrome_worker.py)"; then
             echo "::group::Chrome launch diagnostics"
