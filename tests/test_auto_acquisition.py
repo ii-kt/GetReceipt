@@ -9,7 +9,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "cloud"))
 
-from src.domain.acquisition import AcquisitionOutcome, Stage  # noqa: E402
+from src.domain.acquisition import AcquisitionOutcome, SecurityChallenge, Stage  # noqa: E402
 from src.workflows.auto_acquisition import run_auto_acquisition  # noqa: E402
 
 
@@ -23,6 +23,16 @@ class FakeStatement:
 
 class FakeFetchError(RuntimeError):
     code = "LOGIN_REQUIRED"
+
+
+class FakeVerificationCodeRequired(RuntimeError):
+    code = "SECURITY_CHALLENGE"
+    challenge_kind = "verification_code"
+
+
+class FakeCaptchaChallenge(RuntimeError):
+    code = "SECURITY_CHALLENGE"
+    challenge_kind = "captcha"
 
 
 class FakeFetcher:
@@ -131,7 +141,85 @@ class AutoAcquisitionTest(unittest.TestCase):
         self.assertEqual(result.error_code, "LOGIN_REQUIRED")
         self.assertEqual(result.stage, Stage.FAILED)
         self.assertEqual(result.failure.stage, Stage.FETCHING)
+        self.assertNotIn("credentials rejected", result.failure.message)
         self.assertEqual(storage.upserts, [])
+
+    def test_verification_code_challenge_is_non_terminal_action_required(self) -> None:
+        fetcher = FakeFetcher(error=FakeVerificationCodeRequired("メールの認証コードを入力してください。"))
+        storage = FakeStorage()
+
+        result = run_auto_acquisition(
+            service_id="commufa",
+            target_month="2026-07",
+            fetcher=fetcher,
+            storage=storage,
+        )
+
+        self.assertEqual(result.outcome, AcquisitionOutcome.ACTION_REQUIRED)
+        self.assertFalse(result.success)
+        self.assertTrue(result.action_required)
+        self.assertEqual(result.stage, Stage.AWAITING_SECURITY_CODE)
+        self.assertIsNone(result.failure)
+        self.assertEqual(
+            result.challenge,
+            SecurityChallenge(
+                kind="verification_code",
+                message="メールの認証コードを入力してください。",
+            ),
+        )
+        self.assertEqual(fetcher.calls, ["2026-07"])
+        self.assertEqual(storage.list_calls, 1)
+        self.assertEqual(storage.upserts, [])
+
+    def test_captcha_becomes_interactive_action_required(self) -> None:
+        fetcher = FakeFetcher(error=FakeCaptchaChallenge("CAPTCHAが表示されました。"))
+        storage = FakeStorage()
+
+        result = run_auto_acquisition(
+            service_id="commufa",
+            target_month="2026-07",
+            fetcher=fetcher,
+            storage=storage,
+        )
+
+        self.assertEqual(result.outcome, AcquisitionOutcome.ACTION_REQUIRED)
+        self.assertTrue(result.action_required)
+        self.assertEqual(result.error_code, "")
+        self.assertEqual(
+            result.challenge,
+            SecurityChallenge(
+                kind="captcha",
+                message="CAPTCHAが表示されました。",
+            ),
+        )
+        self.assertIsNone(result.failure)
+        self.assertEqual(result.stage, Stage.AWAITING_USER_ACTION)
+        self.assertEqual(storage.upserts, [])
+
+    def test_fetch_statement_override_reuses_the_standard_save_pipeline(self) -> None:
+        fetcher = FakeFetcher(error=AssertionError("default fetcher must not be called"))
+        storage = FakeStorage()
+        resumed_months: list[str] = []
+
+        def fetch_statement(target_month: str) -> FakeStatement:
+            resumed_months.append(target_month)
+            return FakeStatement(content=b"%PDF-1.7\nGetReceipt resumed PDF")
+
+        result = run_auto_acquisition(
+            service_id="commufa",
+            target_month="2026-07",
+            fetcher=fetcher,
+            storage=storage,
+            fetch_statement=fetch_statement,
+        )
+
+        self.assertEqual(result.outcome, AcquisitionOutcome.ACQUIRED)
+        self.assertTrue(result.success)
+        self.assertFalse(result.action_required)
+        self.assertEqual(resumed_months, ["2026-07"])
+        self.assertEqual(fetcher.calls, [])
+        self.assertEqual(storage.list_calls, 3)
+        self.assertEqual(len(storage.upserts), 1)
 
     def test_missing_file_after_save_fails_post_save_verification(self) -> None:
         fetcher = FakeFetcher()
@@ -203,6 +291,29 @@ class AutoAcquisitionTest(unittest.TestCase):
         self.assertEqual(fetcher.calls, ["2026-07"])
         self.assertEqual(len(storage.upserts), 1)
         self.assertEqual(len(storage.files), 1)
+
+    def test_cancellation_after_fetch_prevents_drive_save(self) -> None:
+        fetcher = FakeFetcher()
+        storage = FakeStorage()
+        checks = 0
+
+        def cancellation_requested() -> bool:
+            nonlocal checks
+            checks += 1
+            return checks >= 3
+
+        result = run_auto_acquisition(
+            service_id="commufa",
+            target_month="2026-07",
+            fetcher=fetcher,
+            storage=storage,
+            cancellation_requested=cancellation_requested,
+        )
+
+        self.assertEqual(AcquisitionOutcome.FAILED, result.outcome)
+        self.assertEqual("ACQUISITION_CANCELLED", result.error_code)
+        self.assertEqual(["2026-07"], fetcher.calls)
+        self.assertEqual([], storage.upserts)
 
 
 if __name__ == "__main__":

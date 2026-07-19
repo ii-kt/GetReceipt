@@ -1,0 +1,32 @@
+{$WORKER_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Cache-Control "no-store"
+		Content-Security-Policy "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
+	@manual_receipt {
+		path /v1/manual-receipts
+		method POST
+	}
+	handle @manual_receipt {
+		request_body {
+			max_size 21MiB
+		}
+		reverse_proxy worker:8080
+	}
+
+	handle {
+		request_body {
+			max_size 16KB
+		}
+		reverse_proxy worker:8080
+	}
+}

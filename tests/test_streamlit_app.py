@@ -3,9 +3,11 @@ from __future__ import annotations
 import importlib
 import sys
 import unittest
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +26,55 @@ class FakeDriveStorage:
 
     def list_files(self) -> list[dict[str, str]]:
         return list(self.files)
+
+
+class FakeHTTPResponse:
+    def __init__(self, status_code: int, payload: dict) -> None:
+        self.status_code = status_code
+        self.payload = payload
+
+    def json(self):
+        return self.payload
+
+
+class FakeBrowserLeaseRegistry:
+    def __init__(self) -> None:
+        self.token = "opaque-test-token"
+        self.lease = None
+        self.service_id = ""
+        self.target_month = ""
+        self.expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+        self.discard_calls: list[str] = []
+
+    def create(self, *, service_id, target_month, browser, run_dir):
+        self.service_id = service_id
+        self.target_month = target_month
+        self.lease = SimpleNamespace(browser=browser, run_dir=run_dir)
+        return SimpleNamespace(token=self.token, expires_at=self.expires_at)
+
+    def metadata(self, token):
+        if token != self.token or self.lease is None:
+            raise RuntimeError("lease unavailable")
+        return SimpleNamespace(
+            service_id=self.service_id,
+            target_month=self.target_month,
+            expires_at=self.expires_at,
+        )
+
+    @contextmanager
+    def checkout(self, token, *, expected_service_id=None, expected_target_month=None):
+        if token != self.token or self.lease is None:
+            raise RuntimeError("lease unavailable")
+        if expected_service_id != self.service_id or expected_target_month != self.target_month:
+            raise RuntimeError("lease mismatch")
+        yield self.lease
+
+    def discard(self, token):
+        self.discard_calls.append(token)
+        if token == self.token:
+            self.lease = None
+            return True
+        return False
 
 
 def receipt_file(date_key: str, partner: str, amount: int) -> dict[str, str]:
@@ -65,6 +116,12 @@ class StreamlitAppTest(unittest.TestCase):
         cls.AppTest = AppTest
 
     def app(self):
+        access_patcher = patch(
+            "src.ui.access_control.require_owner_access",
+            return_value=None,
+        )
+        access_patcher.start()
+        self.addCleanup(access_patcher.stop)
         app = self.AppTest.from_file(str(CLOUD / "streamlit_app.py"))
         app.session_state["getreceipt_month"] = "2026-07"
         app.secrets = {
@@ -272,6 +329,205 @@ class StreamlitAppTest(unittest.TestCase):
         markdown = "\n".join(item.value for item in app.markdown)
         self.assertIn("4件すべてのPDFをGoogle Driveで確認しました", markdown)
         self.assertFalse(any("自動取得" in button.label for button in app.button))
+
+    def test_email_security_code_pauses_and_resumes_the_same_browser(self) -> None:
+        files = [
+            receipt_file("20260605", "株式会社エポスカード", 10001),
+            receipt_file("20260812", "フラットエナジー株式会社", 10003),
+            receipt_file("20260709", "NTTファイナンス株式会社", 10004),
+        ]
+        storage = FakeDriveStorage(files)
+        registry = FakeBrowserLeaseRegistry()
+        browser = MagicMock()
+        resumed: list[tuple[str, str]] = []
+
+        class ResumableFetcher:
+            def resume_after_security_code(self, target_month, code):
+                resumed.append((target_month, code))
+                return object()
+
+        fetcher = ResumableFetcher()
+        calls = 0
+
+        def acquire(**kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return SimpleNamespace(
+                    success=False,
+                    action_required=True,
+                    challenge=SimpleNamespace(
+                        kind="verification_code",
+                        message="メール確認コードの入力が必要です。",
+                    ),
+                    failure=None,
+                )
+            kwargs["fetch_statement"](kwargs["target_month"])
+            if calls == 2:
+                return SimpleNamespace(
+                    success=False,
+                    action_required=True,
+                    challenge=SimpleNamespace(
+                        kind="verification_code",
+                        message="確認コードが拒否されました。",
+                    ),
+                    failure=None,
+                )
+            transaction_month = expected_transaction_month("commufa", kwargs["target_month"])
+            file = receipt_file(
+                f"{transaction_month.replace('-', '')}01",
+                service_by_id("commufa").default_partner,
+                5720,
+            )
+            storage.files.append(file)
+            return SimpleNamespace(
+                success=True,
+                action_required=False,
+                failure=None,
+                file_name=file["name"],
+            )
+
+        app = self.app()
+        with (
+            patch.object(DriveStorage, "from_secrets", return_value=storage),
+            patch("src.automation.browser_session.ManagedBrowser", return_value=browser),
+            patch("src.automation.providers.build_receipt_fetcher", return_value=fetcher),
+            patch("src.workflows.auto_acquisition.run_auto_acquisition", side_effect=acquire),
+            patch(
+                "src.automation.security_challenge.browser_lease_registry",
+                registry,
+            ),
+        ):
+            app.run(timeout=20)
+            acquisition_button = next(button for button in app.button if "自動取得" in button.label)
+            acquisition_button.click().run(timeout=20)
+
+            self.assertEqual(["メールに届いた確認コード"], [item.label for item in app.text_input])
+            self.assertTrue(any("自動取得は終了せず待機" in item.value for item in app.warning))
+            self.assertFalse(any("失敗したため終了" in item.value for item in app.markdown))
+            self.assertEqual(
+                "awaiting_security_code",
+                app.session_state["getreceipt_batch"]["phase"],
+            )
+            browser.close.assert_not_called()
+
+            app.text_input[0].set_value("123")
+            invalid_submit = next(
+                button for button in app.button if button.label == "認証して自動取得を続行"
+            )
+            invalid_submit.click().run(timeout=20)
+            self.assertEqual(calls, 1)
+            self.assertTrue(any("6桁の数字" in item.value for item in app.error))
+            browser.close.assert_not_called()
+
+            app.text_input[0].set_value("123456")
+            submit = next(button for button in app.button if button.label == "認証して自動取得を続行")
+            submit.click().run(timeout=20)
+
+            self.assertEqual(calls, 2)
+            self.assertTrue(any("最新の6桁コード" in item.value for item in app.error))
+            self.assertEqual([], registry.discard_calls)
+            browser.close.assert_not_called()
+
+            app.text_input[0].set_value("654321")
+            retry = next(button for button in app.button if button.label == "認証して自動取得を続行")
+            retry.click().run(timeout=20)
+
+        self.assertEqual(calls, 3)
+        self.assertEqual(
+            resumed,
+            [("2026-07", "123456"), ("2026-07", "654321")],
+        )
+        self.assertEqual(registry.discard_calls, [registry.token])
+        self.assertEqual([], list(app.exception))
+        markdown = "\n".join(item.value for item in app.markdown)
+        self.assertIn("4件すべてのPDFをGoogle Driveで確認しました", markdown)
+        self.assertNotIn("123456", str(app.session_state))
+        self.assertNotIn("654321", str(app.session_state))
+
+    def test_remote_worker_challenge_recovers_from_api_and_does_not_retain_code(self) -> None:
+        files = [
+            receipt_file("20260605", "株式会社エポスカード", 10001),
+            receipt_file("20260812", "フラットエナジー株式会社", 10003),
+            receipt_file("20260709", "NTTファイナンス株式会社", 10004),
+        ]
+        storage = FakeDriveStorage(files)
+        app = self.app()
+        app.secrets["receipt_worker"] = {
+            "base_url": "https://worker.example.test",
+            "api_token": "t" * 48,
+            "owner_id": "owner-1",
+        }
+        responded = False
+        submitted_bodies: list[dict] = []
+        waiting_job = {
+            "id": "job-remote-1",
+            "target_month": "2026-07",
+            "service_ids": ["commufa"],
+            "completed_service_ids": [],
+            "current_service_id": "commufa",
+            "state": "waiting_for_challenge",
+            "version": 2,
+            "created_at": "2026-07-19T01:00:00+00:00",
+            "updated_at": "2026-07-19T01:01:00+00:00",
+            "error": None,
+            "result": None,
+            "challenge": {
+                "id": "challenge-remote-1",
+                "kind": "otp_email",
+                "message": "メールの確認コードを入力してください。",
+                "input_schema": {
+                    "input_type": "code",
+                    "label": "メールに届いた6桁の確認コード",
+                    "required": True,
+                    "min_length": 6,
+                    "max_length": 6,
+                    "pattern": r"^[0-9]{6}$",
+                    "autocomplete": "one-time-code",
+                },
+                "expires_at": "2026-07-19T01:10:00+00:00",
+            },
+        }
+
+        def request(method, url, **kwargs):
+            nonlocal responded
+            if method == "POST" and url.endswith("/respond"):
+                submitted_bodies.append(dict(kwargs["json"]))
+                responded = True
+                return FakeHTTPResponse(200, {**waiting_job, "state": "running", "challenge": None})
+            if method == "GET" and (
+                url.endswith("/v1/jobs/active") or url.endswith("/v1/jobs/job-remote-1")
+            ):
+                if responded:
+                    return FakeHTTPResponse(
+                        200,
+                        {**waiting_job, "state": "running", "challenge": None, "version": 3},
+                    )
+                return FakeHTTPResponse(200, waiting_job)
+            raise AssertionError(f"unexpected worker request: {method} {url}")
+
+        with (
+            patch.object(DriveStorage, "from_secrets", return_value=storage),
+            patch("requests.Session.request", side_effect=request),
+            patch("src.ui.access_control.require_owner_access", return_value=None),
+        ):
+            app.run(timeout=20)
+            self.assertEqual(
+                ["メールに届いた6桁の確認コード"],
+                [item.label for item in app.text_input],
+            )
+            app.text_input[0].set_value("１２３４５６")
+            next(
+                button for button in app.button if button.label == "本人確認を続行"
+            ).click().run(timeout=20)
+
+        self.assertEqual([{"response": "123456"}], submitted_bodies)
+        self.assertNotIn("123456", str(app.session_state))
+        self.assertNotIn("１２３４５６", str(app.session_state))
+        self.assertEqual([], list(app.exception))
+        self.assertTrue(
+            any(button.label == "最新状態に更新" for button in app.button)
+        )
 
     def test_first_failure_ends_batch_without_running_following_services(self) -> None:
         storage = FakeDriveStorage([])

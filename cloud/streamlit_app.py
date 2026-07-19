@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import re
 import shutil
+import unicodedata
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -10,7 +12,9 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 
-from src.automation.browser_session import ManagedBrowser
+from src.automation.browser_session import ManagedBrowser, find_browser_executable
+from src.automation import security_challenge as challenge_runtime
+from src.automation.auth_challenges import profile_for
 from src.automation.credentials import credentials_configured, service_credentials
 from src.automation.providers import build_receipt_fetcher
 from src.config import (
@@ -22,7 +26,16 @@ from src.config import (
     selectable_months,
     service_by_id,
 )
+from src.jobs.client import (
+    WorkerApiError,
+    WorkerClient,
+    WorkerConfigError,
+    worker_connection_from_secrets,
+)
 from src.storage.drive_storage import DriveStorage
+from src.ui import remote_jobs
+from src.ui.access_control import require_owner_access
+from src.ui.manual_upload import render_manual_upload
 from src.ui import styles as ui_styles
 from src.ui.module_contract import ensure_ui_module
 from src.workflows.auto_acquisition import run_auto_acquisition
@@ -40,6 +53,9 @@ TOKYO = ZoneInfo("Asia/Tokyo")
 BATCH_KEY = "getreceipt_batch"
 FAILURE_KEY = "getreceipt_failure"
 NOTICE_KEY = "getreceipt_notice"
+SECURITY_CHALLENGE_KEY = "getreceipt_security_challenge"
+SECURITY_WAITING_PHASE = "awaiting_security_code"
+SECURITY_SUBMITTING_PHASE = "submitting_security_code"
 LOGGER = logging.getLogger(__name__)
 MONTHLY_VIEW = "毎月の4件"
 ARCHIVE_VIEW = "単発領収書"
@@ -90,8 +106,8 @@ def load_drive_snapshot() -> tuple[DriveStorage | None, list[dict[str, str]], st
     try:
         storage = DriveStorage.from_secrets(st.secrets)
         return storage, storage.list_files(), ""
-    except Exception as error:
-        return None, [], f"Google Driveの領収書フォルダを確認できませんでした: {error}"
+    except Exception:
+        return None, [], "Google Driveの領収書フォルダを確認できませんでした。"
 
 
 def receipts_for_month(files: list[dict[str, str]], target_month: str) -> dict[str, StoredReceipt | None]:
@@ -117,31 +133,76 @@ def batch_for(target_month: str) -> dict[str, Any] | None:
     return batch
 
 
+def security_challenge_for(target_month: str) -> dict[str, Any] | None:
+    challenge = st.session_state.get(SECURITY_CHALLENGE_KEY)
+    if not isinstance(challenge, dict) or challenge.get("target_month") != target_month:
+        return None
+    return challenge
+
+
+def discard_security_challenge() -> None:
+    challenge = st.session_state.pop(SECURITY_CHALLENGE_KEY, None)
+    if not isinstance(challenge, dict):
+        return
+    token = str(challenge.get("token") or "")
+    if not token:
+        return
+    try:
+        challenge_runtime.browser_lease_registry.discard(token)
+    except Exception as error:
+        LOGGER.error(
+            "Security challenge runtime cleanup failed (%s)",
+            type(error).__name__,
+        )
+
+
 def render_service_rows(
     receipts: dict[str, StoredReceipt | None],
     target_month: str,
     batch: dict[str, Any] | None,
 ) -> None:
     pending = list(batch.get("service_ids", ())) if batch else []
+    completed = set(batch.get("completed", ())) if batch else set()
     current_service = str(batch.get("current_service") or "") if batch else ""
+    remote_failures = batch.get("failed") if batch else {}
+    if not isinstance(remote_failures, dict):
+        remote_failures = {}
+    challenge = security_challenge_for(target_month)
+    challenge_service = str(challenge.get("service_id") or "") if challenge else ""
 
     for service in SERVICES:
         receipt = receipts[service.id]
         transaction_month = expected_transaction_month(service.id, target_month)
         transaction_label = month_label(transaction_month).removesuffix("分")
-        failure = failure_for(service.id, target_month) if receipt is None else None
+        remote_failure = remote_failures.get(service.id)
+        if not isinstance(remote_failure, dict):
+            remote_failure = None
+        local_failure = (
+            failure_for(service.id, target_month)
+            if receipt is None
+            else None
+        )
         if receipt is not None:
             status = "saved"
             detail = f"{transaction_label}の取引PDFをDriveで確認済み"
+        elif service.id in completed:
+            status = "running"
+            detail = "保存完了。Google Driveの表示を更新中"
+        elif remote_failure:
+            status = "failed"
+            detail = remote_failure.get("message", "自動取得に失敗しました。")
+        elif service.id == challenge_service:
+            status = "running"
+            detail = "本人確認コードの入力を待っています"
         elif service.id == current_service:
             status = "running"
             detail = "自動取得を実行中"
         elif batch and service.id in pending:
             status = "queued"
             detail = "自動取得を待機中"
-        elif failure:
+        elif local_failure:
             status = "failed"
-            detail = failure.get("message", "自動取得に失敗しました。")
+            detail = local_failure.get("message", "自動取得に失敗しました。")
         else:
             status = "missing"
             detail = f"{transaction_label}の取引PDFはDriveにありません"
@@ -159,6 +220,7 @@ def render_service_rows(
 def queue_batch(target_month: str, service_ids: list[str]) -> None:
     if not service_ids:
         return
+    discard_security_challenge()
     st.session_state[BATCH_KEY] = {
         "target_month": target_month,
         "service_ids": service_ids,
@@ -175,8 +237,8 @@ def cleanup_runtime(browser: ManagedBrowser | None, run_dir: Path) -> str:
     if browser is not None:
         try:
             browser.close(clear_profile=True)
-        except Exception as error:
-            errors.append(f"ブラウザを終了できませんでした: {error}")
+        except Exception:
+            errors.append("browser")
 
     runtime_root = (DATA_DIR / "acquisition-runtime").resolve()
     target = run_dir.resolve()
@@ -185,9 +247,124 @@ def cleanup_runtime(browser: ManagedBrowser | None, run_dir: Path) -> str:
     elif target.exists():
         try:
             shutil.rmtree(target)
-        except Exception as error:
-            errors.append(f"一時ファイルを削除できませんでした: {error}")
-    return " ".join(errors)
+        except Exception:
+            errors.append("runtime_files")
+    return ",".join(errors)
+
+
+def end_batch_with_failure(
+    *,
+    service_id: str,
+    target_month: str,
+    code: str,
+    message: str,
+) -> None:
+    st.session_state[FAILURE_KEY] = {
+        "service_id": service_id,
+        "target_month": target_month,
+        "code": code,
+        "message": message,
+    }
+    st.session_state.pop(BATCH_KEY, None)
+
+
+def complete_batch_service(batch: dict[str, Any], service_id: str) -> bool:
+    service_ids = list(batch.get("service_ids", ()))
+    completed = list(batch.get("completed", ()))
+    if service_id not in completed:
+        completed.append(service_id)
+    batch["completed"] = completed
+    batch["phase"] = "running"
+    next_services = [item for item in service_ids if item not in completed]
+    if next_services:
+        batch["current_service"] = next_services[0]
+        st.session_state[BATCH_KEY] = batch
+        return False
+    st.session_state[NOTICE_KEY] = "未取得だったPDFをすべてGoogle Driveで確認しました。"
+    st.session_state.pop(BATCH_KEY, None)
+    return True
+
+
+def security_challenge_state_matches(
+    batch: dict[str, Any],
+    challenge: dict[str, Any],
+    *,
+    phase: str,
+) -> bool:
+    """Confirm that a security-code action still owns the live session state."""
+
+    current_batch = st.session_state.get(BATCH_KEY)
+    current_challenge = st.session_state.get(SECURITY_CHALLENGE_KEY)
+    if not isinstance(current_batch, dict) or not isinstance(current_challenge, dict):
+        return False
+    if current_batch.get("phase") != phase or current_challenge.get("phase") != phase:
+        return False
+
+    token = str(challenge.get("token") or "")
+    service_id = str(challenge.get("service_id") or "")
+    target_month = str(challenge.get("target_month") or "")
+    if not token or not service_id or not target_month:
+        return False
+
+    return (
+        str(current_challenge.get("token") or "") == token
+        and str(current_challenge.get("service_id") or "") == service_id
+        and str(current_challenge.get("target_month") or "") == target_month
+        and str(current_batch.get("current_service") or "") == service_id
+        and str(current_batch.get("target_month") or "") == target_month
+        and str(batch.get("current_service") or "") == service_id
+        and str(batch.get("target_month") or "") == target_month
+    )
+
+
+def begin_security_code_submission(
+    batch: dict[str, Any],
+    challenge: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Move both state records to submitting without retaining the OTP value."""
+
+    if not security_challenge_state_matches(
+        batch,
+        challenge,
+        phase=SECURITY_WAITING_PHASE,
+    ):
+        return None
+
+    current_batch = st.session_state[BATCH_KEY]
+    current_challenge = st.session_state[SECURITY_CHALLENGE_KEY]
+    submitting_batch = {**current_batch, "phase": SECURITY_SUBMITTING_PHASE}
+    submitting_challenge = {**current_challenge, "phase": SECURITY_SUBMITTING_PHASE}
+
+    # There is no Streamlit call between these assignments, so another rerun
+    # cannot observe a clickable waiting form after only one record changed.
+    st.session_state[BATCH_KEY] = submitting_batch
+    st.session_state[SECURITY_CHALLENGE_KEY] = submitting_challenge
+    return submitting_batch, submitting_challenge
+
+
+def restore_security_code_waiting(
+    batch: dict[str, Any],
+    challenge: dict[str, Any],
+    *,
+    error: str,
+) -> bool:
+    """Return a rejected provider response to the same safe waiting form."""
+
+    if not security_challenge_state_matches(
+        batch,
+        challenge,
+        phase=SECURITY_SUBMITTING_PHASE,
+    ):
+        return False
+    waiting_batch = {**st.session_state[BATCH_KEY], "phase": SECURITY_WAITING_PHASE}
+    waiting_challenge = {
+        **st.session_state[SECURITY_CHALLENGE_KEY],
+        "phase": SECURITY_WAITING_PHASE,
+        "error": error,
+    }
+    st.session_state[BATCH_KEY] = waiting_batch
+    st.session_state[SECURITY_CHALLENGE_KEY] = waiting_challenge
+    return True
 
 
 def execute_next_service(storage: DriveStorage, batch: dict[str, Any]) -> None:
@@ -205,16 +382,18 @@ def execute_next_service(storage: DriveStorage, batch: dict[str, Any]) -> None:
     service = service_by_id(service_id)
     position = service_ids.index(service_id) + 1
     batch["current_service"] = service_id
+    batch["phase"] = "running"
     st.session_state[BATCH_KEY] = batch
     status_box = st.status(
         f"{position}/{len(service_ids)}  {service.label}を自動取得しています。",
         expanded=True,
     )
 
-    run_dir = DATA_DIR / "acquisition-runtime" / f"{service_id}-{target_month}"
+    run_dir = challenge_runtime.new_attempt_run_dir(service_id, target_month)
     browser: ManagedBrowser | None = None
     result = None
     unexpected_error = ""
+    runtime_preserved = False
     try:
         credentials = service_credentials(st.secrets, service_id)
         browser = ManagedBrowser(
@@ -229,12 +408,58 @@ def execute_next_service(storage: DriveStorage, batch: dict[str, Any]) -> None:
             storage=storage,
             on_progress=lambda event: status_box.write(event.message),
         )
-    except Exception as error:
-        unexpected_error = f"自動取得を開始できませんでした: {error}"
+        if getattr(result, "action_required", False):
+            if not callable(getattr(fetcher, "resume_after_security_code", None)):
+                raise RuntimeError("この請求元は確認コードによる安全な再開に対応していません。")
+            challenge = getattr(result, "challenge", None)
+            profile_id = "webbilling" if service_id == "mobile" else service_id
+            profile = profile_for(profile_id)
+            input_label = {
+                "epos": "カード記載の3桁セキュリティコード",
+                "commufa": "メールに届いた確認コード",
+                "mobile": "メールまたはSMSに届いた確認コード",
+            }.get(service_id, "確認コード")
+            ticket = challenge_runtime.browser_lease_registry.create(
+                service_id=service_id,
+                target_month=target_month,
+                browser=browser,
+                run_dir=run_dir,
+            )
+            st.session_state[SECURITY_CHALLENGE_KEY] = {
+                "token": ticket.token,
+                "service_id": service_id,
+                "target_month": target_month,
+                "kind": str(getattr(challenge, "kind", "verification_code")),
+                "message": str(getattr(challenge, "message", "確認コードの入力が必要です。")),
+                "expires_at": ticket.expires_at,
+                "input_label": input_label,
+                "min_length": profile.min_length,
+                "max_length": profile.max_length,
+                "pattern": profile.pattern.pattern,
+                "error": "",
+            }
+            batch["phase"] = "awaiting_security_code"
+            st.session_state[BATCH_KEY] = batch
+            runtime_preserved = True
+    except Exception:
+        unexpected_error = (
+            "自動取得を開始できませんでした。時間をおいて再試行してください。"
+        )
     finally:
-        cleanup_error = cleanup_runtime(browser, run_dir)
-        if cleanup_error:
-            LOGGER.error("Acquisition runtime cleanup failed: %s", cleanup_error)
+        if not runtime_preserved:
+            cleanup_error = cleanup_runtime(browser, run_dir)
+            if cleanup_error:
+                LOGGER.error(
+                    "Acquisition runtime cleanup failed (%s)",
+                    cleanup_error,
+                )
+
+    if runtime_preserved:
+        status_box.update(
+            label=f"{service.label}は本人確認コードの入力を待っています。",
+            state="running",
+        )
+        st.rerun()
 
     failure_code = ""
     failure_message = ""
@@ -249,35 +474,225 @@ def execute_next_service(storage: DriveStorage, batch: dict[str, Any]) -> None:
         failure_code = failure.code if failure else "ACQUISITION_FAILED"
         failure_message = failure.message if failure else "自動取得に失敗しました。"
     if failure_code:
-        st.session_state[FAILURE_KEY] = {
-            "service_id": service_id,
-            "target_month": target_month,
-            "code": failure_code,
-            "message": failure_message,
-        }
-        st.session_state.pop(BATCH_KEY, None)
+        end_batch_with_failure(
+            service_id=service_id,
+            target_month=target_month,
+            code=failure_code,
+            message=failure_message,
+        )
         status_box.update(
             label=f"{service.label}の自動取得に失敗したため終了しました。",
             state="error",
         )
         st.rerun()
 
-    completed.append(service_id)
-    batch["completed"] = completed
-    next_services = [item for item in service_ids if item not in completed]
-    if next_services:
-        batch["current_service"] = next_services[0]
-        st.session_state[BATCH_KEY] = batch
+    batch_complete = complete_batch_service(batch, service_id)
+    if not batch_complete:
         status_box.update(
             label=f"{service.label}をDriveで確認しました。次へ進みます。",
             state="complete",
         )
     else:
-        st.session_state[NOTICE_KEY] = "未取得だったPDFをすべてGoogle Driveで確認しました。"
-        st.session_state.pop(BATCH_KEY, None)
         status_box.update(label="自動取得が完了しました。", state="complete")
 
     st.rerun()
+
+
+def resume_security_code(
+    storage: DriveStorage,
+    batch: dict[str, Any],
+    challenge: dict[str, Any],
+    code: str,
+) -> None:
+    token = str(challenge.get("token") or "")
+    service_id = str(challenge.get("service_id") or "")
+    target_month = str(challenge.get("target_month") or "")
+    service = service_by_id(service_id)
+    result = None
+    unexpected_error = ""
+    status_box = st.status(
+        f"{service.label}へ確認コードを送信し、自動取得を再開しています。",
+        expanded=True,
+    )
+
+    try:
+        with challenge_runtime.browser_lease_registry.checkout(
+            token,
+            expected_service_id=service_id,
+            expected_target_month=target_month,
+        ) as lease:
+            credentials = service_credentials(st.secrets, service_id)
+            fetcher = build_receipt_fetcher(service_id, lease.browser, credentials)
+            resume = getattr(fetcher, "resume_after_security_code", None)
+            if not callable(resume):
+                raise RuntimeError("この請求元は確認コードによる再開に対応していません。")
+            result = run_auto_acquisition(
+                service_id=service_id,
+                target_month=target_month,
+                fetcher=fetcher,
+                storage=storage,
+                on_progress=lambda event: status_box.write(event.message),
+                fetch_statement=lambda month: resume(month, code),
+            )
+    except challenge_runtime.BrowserLeaseUnavailableError:
+        st.session_state.pop(SECURITY_CHALLENGE_KEY, None)
+        batch["phase"] = "running"
+        st.session_state[BATCH_KEY] = batch
+        st.session_state[NOTICE_KEY] = (
+            "確認コード待機セッションの期限が切れたため、新しい確認コードを発行します。"
+        )
+        status_box.update(label="新しい確認コードを発行します。", state="running")
+        st.rerun()
+    except Exception:
+        unexpected_error = (
+            "確認コード送信後の自動取得を再開できませんでした。"
+            "新しい確認コードで再試行してください。"
+        )
+
+    if result is not None and getattr(result, "action_required", False):
+        updated = dict(challenge)
+        minimum = int(challenge.get("min_length") or 6)
+        maximum = int(challenge.get("max_length") or 6)
+        expected_label = (
+            f"{maximum}桁コード"
+            if minimum == maximum
+            else f"{minimum}〜{maximum}桁コード"
+        )
+        updated["error"] = (
+            f"確認コードを受け付けられませんでした。最新の{expected_label}を確認してください。"
+        )
+        st.session_state[SECURITY_CHALLENGE_KEY] = updated
+        status_box.update(label="確認コードを再確認してください。", state="error")
+        st.rerun()
+
+    challenge_runtime.browser_lease_registry.discard(token)
+    st.session_state.pop(SECURITY_CHALLENGE_KEY, None)
+
+    failure_code = ""
+    failure_message = ""
+    if unexpected_error:
+        failure_code = "SECURITY_CODE_RESUME_FAILED"
+        failure_message = unexpected_error
+    elif result is None:
+        failure_code = "SECURITY_CODE_RESUME_FAILED"
+        failure_message = "確認コード送信後の自動取得結果を確認できませんでした。"
+    elif not result.success:
+        failure = result.failure
+        failure_code = failure.code if failure else "ACQUISITION_FAILED"
+        failure_message = failure.message if failure else "自動取得に失敗しました。"
+
+    if failure_code:
+        end_batch_with_failure(
+            service_id=service_id,
+            target_month=target_month,
+            code=failure_code,
+            message=failure_message,
+        )
+        status_box.update(
+            label=f"{service.label}の自動取得に失敗したため終了しました。",
+            state="error",
+        )
+        st.rerun()
+
+    batch_complete = complete_batch_service(batch, service_id)
+    status_box.update(
+        label=(
+            "自動取得が完了しました。"
+            if batch_complete
+            else f"{service.label}をDriveで確認しました。次へ進みます。"
+        ),
+        state="complete",
+    )
+    st.rerun()
+
+
+def restart_security_challenge(batch: dict[str, Any], challenge: dict[str, Any]) -> None:
+    token = str(challenge.get("token") or "")
+    if token:
+        challenge_runtime.browser_lease_registry.discard(token)
+    st.session_state.pop(SECURITY_CHALLENGE_KEY, None)
+    batch["phase"] = "running"
+    st.session_state[BATCH_KEY] = batch
+    st.session_state[NOTICE_KEY] = "新しい確認コードを発行するため、ログインから再開します。"
+    st.rerun()
+
+
+def render_security_code_form(
+    storage: DriveStorage,
+    batch: dict[str, Any],
+    challenge: dict[str, Any],
+) -> None:
+    token = str(challenge.get("token") or "")
+    service_id = str(challenge.get("service_id") or "")
+    target_month = str(challenge.get("target_month") or "")
+    service = service_by_id(service_id)
+    try:
+        metadata = challenge_runtime.browser_lease_registry.metadata(token)
+    except challenge_runtime.BrowserLeaseUnavailableError:
+        st.session_state.pop(SECURITY_CHALLENGE_KEY, None)
+        batch["phase"] = "running"
+        st.session_state[BATCH_KEY] = batch
+        st.session_state[NOTICE_KEY] = (
+            "確認コード待機セッションの期限が切れたため、新しい確認コードを発行します。"
+        )
+        st.rerun()
+
+    if metadata.service_id != service_id or metadata.target_month != target_month:
+        restart_security_challenge(batch, challenge)
+
+    expires_label = metadata.expires_at.astimezone(TOKYO).strftime("%H:%M")
+    message = str(challenge.get("message") or "追加の本人確認コードが必要です。")
+    st.warning(
+        f"{service.label}: {message}"
+        " iPhoneで確認し、この画面へ戻って入力してください。自動取得は終了せず待機しています。",
+        icon=":material/mark_email_unread:",
+    )
+    st.caption(f"入力期限の目安: {expires_label}　このタブは閉じたり再読み込みしたりしないでください。")
+    error_message = str(challenge.get("error") or "")
+    if error_message:
+        st.error(error_message, icon=":material/error:")
+
+    with st.form("security_code_form", clear_on_submit=True, border=True):
+        minimum = int(challenge.get("min_length") or 6)
+        maximum = int(challenge.get("max_length") or 6)
+        input_label = str(challenge.get("input_label") or "確認コード")
+        placeholder = (
+            f"{minimum}桁の数字"
+            if minimum == maximum
+            else f"{minimum}〜{maximum}桁の数字"
+        )
+        code = st.text_input(
+            input_label,
+            type="password",
+            max_chars=maximum,
+            autocomplete="one-time-code",
+            placeholder=placeholder,
+        )
+        submitted = st.form_submit_button(
+            "認証して自動取得を続行",
+            type="primary",
+            use_container_width=True,
+            icon=":material/verified_user:",
+        )
+
+    if submitted:
+        normalized_code = unicodedata.normalize("NFKC", str(code or "")).strip()
+        pattern = str(challenge.get("pattern") or r"^[0-9]{6}$")
+        if re.fullmatch(pattern, normalized_code) is None:
+            updated = dict(challenge)
+            updated["error"] = (
+                f"確認コードは{placeholder}で入力してください。"
+            )
+            st.session_state[SECURITY_CHALLENGE_KEY] = updated
+            st.rerun()
+        resume_security_code(storage, batch, challenge, normalized_code)
+
+    if st.button(
+        "新しい確認コードを発行",
+        use_container_width=True,
+        icon=":material/refresh:",
+    ):
+        restart_security_challenge(batch, challenge)
 
 
 def render_monthly_view(
@@ -297,6 +712,7 @@ def render_monthly_view(
 
     if drive_error or storage is None:
         st.session_state.pop(BATCH_KEY, None)
+        discard_security_challenge()
         ui_styles.render_month_hero(
             month_label=month_label(selected_month),
             saved_count=0,
@@ -313,7 +729,116 @@ def render_monthly_view(
     receipts = receipts_for_month(drive_files, selected_month)
     saved_count = sum(receipt is not None for receipt in receipts.values())
     missing_services = [service for service in SERVICES if receipts[service.id] is None]
+
+    try:
+        worker_connection = worker_connection_from_secrets(st.secrets)
+    except WorkerConfigError as error:
+        ui_styles.render_month_hero(
+            month_label=month_label(selected_month),
+            saved_count=saved_count,
+            detail="常設ワーカーの設定を確認してください",
+            state="failed",
+        )
+        ui_styles.render_fatal_notice(
+            title="iPhone用ワーカーを開始できません",
+            detail=str(error),
+            code="WORKER_CONFIG_INVALID",
+        )
+        render_service_rows(receipts, selected_month, None)
+        render_manual_upload(
+            storage=storage,
+            target_month=selected_month,
+            missing_services=missing_services,
+        )
+        return
+
+    if worker_connection is not None:
+        worker_client = WorkerClient(worker_connection)
+        microsoft_required = any(
+            service.id == "tokuten"
+            for service in missing_services
+        )
+        microsoft_ready = remote_jobs.render_microsoft_connection(
+            worker_client,
+            required=microsoft_required,
+        )
+        acquirable_service_ids = [
+            service.id
+            for service in missing_services
+            if service.id != "tokuten" or microsoft_ready
+        ]
+        remote_jobs.render_remote_month(
+            client=worker_client,
+            target_month=selected_month,
+            receipts=receipts,
+            missing_service_ids=[service.id for service in missing_services],
+            acquirable_service_ids=acquirable_service_ids,
+            render_hero=lambda **values: ui_styles.render_month_hero(
+                month_label=month_label(selected_month),
+                **values,
+            ),
+            render_progress=ui_styles.render_progress,
+            render_rows=render_service_rows,
+        )
+        render_manual_upload(
+            storage=storage,
+            target_month=selected_month,
+            missing_services=missing_services,
+            acquisition_active=lambda: _remote_acquisition_active(
+                worker_client,
+                selected_month,
+            ),
+            worker_client=worker_client,
+        )
+        st.link_button(
+            "Google Driveの領収書フォルダを開く",
+            RECEIPT_DRIVE_FOLDER_URL,
+            use_container_width=True,
+            icon=":material/folder_open:",
+        )
+        return
+
+    if missing_services and find_browser_executable() is None:
+        ui_styles.render_month_hero(
+            month_label=month_label(selected_month),
+            saved_count=saved_count,
+            detail="常設のGoogle Chromeワーカーが未設定です",
+            state="failed",
+        )
+        ui_styles.render_fatal_notice(
+            title="iPhone単体の自動取得を開始できません",
+            detail=(
+                "この環境にはGoogle Chromeがありません。"
+                "HTTPSの常設ワーカーをStreamlit Secretsの"
+                "[receipt_worker]に設定してください。"
+            ),
+            code="CHROME_WORKER_NOT_CONFIGURED",
+        )
+        render_service_rows(receipts, selected_month, None)
+        render_manual_upload(
+            storage=storage,
+            target_month=selected_month,
+            missing_services=missing_services,
+        )
+        st.link_button(
+            "Google Driveの領収書フォルダを開く",
+            RECEIPT_DRIVE_FOLDER_URL,
+            use_container_width=True,
+            icon=":material/folder_open:",
+        )
+        return
+
     active_batch = batch_for(selected_month)
+    active_challenge = security_challenge_for(selected_month)
+    if active_challenge and not active_batch:
+        discard_security_challenge()
+        active_challenge = None
+    elif active_challenge and active_batch:
+        challenged_service_id = str(active_challenge.get("service_id") or "")
+        if receipts.get(challenged_service_id) is not None:
+            discard_security_challenge()
+            complete_batch_service(active_batch, challenged_service_id)
+            st.rerun()
 
     stored_failure = st.session_state.get(FAILURE_KEY)
     if isinstance(stored_failure, dict):
@@ -327,6 +852,10 @@ def render_monthly_view(
     if saved_count == len(SERVICES):
         hero_detail = "4件すべてのPDFをGoogle Driveで確認しました"
         hero_state = "complete"
+    elif active_challenge:
+        challenge_service = service_by_id(str(active_challenge.get("service_id") or ""))
+        hero_detail = f"{challenge_service.label}の本人確認コードを待っています"
+        hero_state = "running"
     elif active_batch:
         hero_detail = "未取得PDFの自動取得を実行しています"
         hero_state = "running"
@@ -375,7 +904,9 @@ def render_monthly_view(
             code=visible_failure.get("code", "ACQUISITION_FAILED"),
         )
 
-    if not active_batch and missing_services and missing_credentials:
+    if active_batch and active_challenge:
+        render_security_code_form(storage, active_batch, active_challenge)
+    elif not active_batch and missing_services and missing_credentials:
         ui_styles.render_fatal_notice(
             title="自動取得を開始できません",
             detail=f"ログイン情報が未設定です: {'、'.join(missing_credentials)}",
@@ -392,6 +923,12 @@ def render_monthly_view(
             queue_batch(selected_month, [service.id for service in missing_services])
 
     render_service_rows(receipts, selected_month, active_batch)
+    render_manual_upload(
+        storage=storage,
+        target_month=selected_month,
+        missing_services=missing_services,
+        acquisition_active=lambda: active_batch is not None,
+    )
     st.link_button(
         "Google Driveの領収書フォルダを開く",
         RECEIPT_DRIVE_FOLDER_URL,
@@ -399,8 +936,81 @@ def render_monthly_view(
         icon=":material/folder_open:",
     )
 
-    if active_batch:
+    if active_batch and not active_challenge:
         execute_next_service(storage, active_batch)
+
+
+def _remote_acquisition_active(client: WorkerClient, target_month: str) -> bool:
+    try:
+        return client.find_active_job(target_month) is not None
+    except Exception:
+        # A connectivity failure must not permit a concurrent manual save.
+        return True
+
+
+def handle_microsoft_oauth_callback() -> None:
+    notice = str(st.session_state.pop("microsoft_oauth_notice", "") or "")
+    oauth_error = str(st.session_state.pop("microsoft_oauth_error", "") or "")
+    if notice:
+        st.success(notice, icon=":material/mark_email_read:")
+    if oauth_error:
+        st.error(oauth_error, icon=":material/mail_lock:")
+
+    code = _query_value("code")
+    state = _query_value("state")
+    provider_error = _query_value("error")
+    if not state or (not code and not provider_error):
+        return
+    try:
+        connection = worker_connection_from_secrets(st.secrets)
+    except WorkerConfigError:
+        connection = None
+    if connection is None:
+        return
+
+    if provider_error:
+        st.session_state["microsoft_oauth_error"] = (
+            "Microsoftメール接続がキャンセルされたか、認証に失敗しました。"
+        )
+        _clear_oauth_query()
+        st.rerun()
+        return
+
+    try:
+        WorkerClient(connection).complete_microsoft_oauth(
+            code=code,
+            state=state,
+        )
+    except (WorkerApiError, ValueError) as error:
+        st.session_state["microsoft_oauth_error"] = str(error)
+    else:
+        st.session_state["microsoft_oauth_notice"] = (
+            "Microsoftメールを読み取り専用で接続しました。"
+        )
+        st.session_state.pop("microsoft_authorization_url", None)
+    finally:
+        code = ""
+        state = ""
+        _clear_oauth_query()
+    st.rerun()
+
+
+def _query_value(name: str) -> str:
+    try:
+        value = st.query_params.get(name, "")
+    except (AttributeError, TypeError):
+        return ""
+    if isinstance(value, list):
+        value = value[0] if value else ""
+    return str(value or "").strip()
+
+
+def _clear_oauth_query() -> None:
+    for name in ("code", "state", "error", "error_description", "session_state"):
+        try:
+            del st.query_params[name]
+        except (KeyError, TypeError, AttributeError):
+            pass
 
 
 def _currency_code(value: object) -> str:
@@ -505,6 +1115,8 @@ def render_archive_view(drive_files: list[dict[str, str]], drive_error: str) -> 
 
 
 ui_styles.inject_design()
+require_owner_access(st, st.secrets)
+handle_microsoft_oauth_callback()
 storage, drive_files, drive_error = load_drive_snapshot()
 ui_styles.render_compact_header(
     sync_label=current_sync_label() if not drive_error else "Drive未確認",

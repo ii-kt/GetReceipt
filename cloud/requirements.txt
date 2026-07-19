@@ -1,4 +1,6 @@
 streamlit==1.58.0
+streamlit-image-coordinates==0.4.0
+cryptography>=42,<50
 google-api-python-client>=2.130
 google-auth>=2.29
 pypdf>=4.2

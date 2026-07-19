@@ -8,9 +8,25 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .auth_challenges import (
+    AuthChallengeClassification,
+    AuthChallengeSubmissionError,
+    AuthCodeValidationError,
+    inspect_current_auth_challenge,
+    submit_current_auth_code,
+)
 from .browser_session import ManagedBrowser
 from .epos import AcquisitionError, FetchedStatement
-from ..config import DATA_DIR, expected_transaction_month, parse_month_key, service_by_id
+from .security_challenge import (
+    ChallengeKind,
+    SecurityChallengeSubmissionError,
+    SecurityCodeValidationError,
+    inspect_commufa_security_challenge,
+    normalize_challenge_kind,
+    submit_commufa_security_code,
+)
+from .statement_validation import inspect_acquired_statement
+from ..config import expected_transaction_month, parse_month_key, service_by_id
 from ..domain.document_metadata import extract_pdf_text
 
 
@@ -178,11 +194,20 @@ def _apply_auto_login_result(browser: ManagedBrowser, result: dict[str, Any], se
             code=code,
             advice="Streamlit CloudのSecretsに対象サービスのID/メールアドレスとパスワードを設定してください。",
         )
+    if code == "SECURITY_ORIGIN_MISMATCH":
+        raise AcquisitionError(
+            f"{service_label}の公式ログインページを確認できませんでした。",
+            code=code,
+            advice="認証情報を入力せず、安全のため取得を終了しました。",
+            challenge_kind=ChallengeKind.OTHER,
+        )
     if code in {"SECURITY_CHALLENGE", "WAIT_SECURITY_CODE"} or result.get("waitingForSecurityCode"):
+        challenge_kind = normalize_challenge_kind(result.get("challengeKind"))
         raise AcquisitionError(
             f"{service_label}で追加認証が表示されました。",
             code="SECURITY_CHALLENGE",
             advice="ワンタイムコード、CAPTCHA、本人確認などサイト側の追加認証が出ているため、通常ログインの自動入力では続行できません。",
+            challenge_kind=challenge_kind,
         )
     if result.get("attempted") and result.get("click"):
         click = result["click"]
@@ -202,6 +227,7 @@ class CommufaAutoFetcher:
         self.credentials = credentials or {}
         self.service = service_by_id("commufa")
         self.config = SERVICE_AUTOMATION_CONFIGS["commufa"]
+        self._credential_submission_attempted = False
 
     def open_portal(self) -> dict[str, Any]:
         self.browser.navigate(self.config.target_url, wait_seconds=1.5)
@@ -209,10 +235,39 @@ class CommufaAutoFetcher:
         return self.browser.page_summary()
 
     def fetch_pdf(self, target_month: str) -> FetchedStatement:
-        year, month = parse_month_key(target_month)
         self.browser.clear_downloads()
         self.browser.navigate(self.config.target_url, wait_seconds=1.5)
         self._wait_for_login()
+        return self._fetch_statement_from_current_page(target_month)
+
+    def resume_after_security_code(self, target_month: str, code: str) -> FetchedStatement:
+        """Resume the exact live Commufa page after a six-digit user code.
+
+        This deliberately does not navigate to the portal. A missing browser,
+        changed target, unexpected origin, CAPTCHA, or ambiguous input field is
+        a terminal error for this attempt.
+        """
+
+        try:
+            submit_commufa_security_code(self.browser, code)
+        except SecurityCodeValidationError as error:
+            raise AcquisitionError(
+                str(error),
+                code="SECURITY_CODE_SUBMISSION_FAILED",
+                challenge_kind=ChallengeKind.VERIFICATION_CODE,
+            ) from error
+        except SecurityChallengeSubmissionError as error:
+            raise AcquisitionError(
+                str(error),
+                code="SECURITY_CODE_SUBMISSION_FAILED",
+                challenge_kind=error.challenge_kind,
+            ) from error
+        self._wait_for_login_after_security_code()
+        self.browser.clear_downloads()
+        return self._fetch_statement_from_current_page(target_month)
+
+    def _fetch_statement_from_current_page(self, target_month: str) -> FetchedStatement:
+        year, month = parse_month_key(target_month)
 
         metadata_texts: list[str] = []
         logs: list[str] = []
@@ -252,7 +307,9 @@ class CommufaAutoFetcher:
         summary_before_print = self.browser.page_summary()
         if summary_before_print.get("text"):
             metadata_texts.append(str(summary_before_print["text"]))
-        pdf_path = self.browser.print_to_pdf(DATA_DIR / "browser-downloads-commufa" / f"commufa-{target_month}-{int(time.time())}.pdf")
+        pdf_path = self.browser.print_to_pdf(
+            self.browser.download_dir / f"commufa-{target_month}-{int(time.time())}.pdf"
+        )
         content = _downloaded_pdf_content(pdf_path, self.service.label)
         assert_commufa_usage_month(content, target_month)
         return FetchedStatement(
@@ -275,7 +332,7 @@ class CommufaAutoFetcher:
                 return
             result = self.browser.evaluate(build_configured_auto_login_expression(self.credentials), timeout=15) or {}
             last_reason = str(result.get("reason") or result.get("code") or "")
-            if _apply_auto_login_result(self.browser, result, self.service.label):
+            if self._apply_login_result(result):
                 continue
             time.sleep(1.0)
         raise AcquisitionError(
@@ -284,14 +341,70 @@ class CommufaAutoFetcher:
             advice=last_reason or "Streamlit Cloud Secretsのログイン情報とコミュファのログイン画面を確認してください。",
         )
 
+    def _wait_for_login_after_security_code(self, timeout_seconds: float = 60) -> None:
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            summary = self.browser.current_page_summary()
+            if classify_configured_login_state(summary, self.config) == "logged-in":
+                return
+            observation = inspect_commufa_security_challenge(self.browser)
+            if observation is not None:
+                if observation.kind is ChallengeKind.VERIFICATION_CODE:
+                    if observation.code_rejected:
+                        raise AcquisitionError(
+                            "コミュファで確認コードが拒否されました。",
+                            code="SECURITY_CODE_REJECTED",
+                            advice="最新の確認コードを確認し、新しい取得操作からやり直してください。",
+                            challenge_kind=ChallengeKind.VERIFICATION_CODE,
+                        )
+                    time.sleep(0.8)
+                    continue
+                raise AcquisitionError(
+                    "コミュファで確認コード以外の追加認証が表示されました。",
+                    code="SECURITY_CHALLENGE",
+                    advice="CAPTCHA、本人確認、秘密の質問などは自動入力せず終了します。",
+                    challenge_kind=observation.kind,
+                )
+            time.sleep(0.8)
+        raise AcquisitionError(
+            "コミュファで確認コード送信後のログイン完了を確認できませんでした。",
+            code="SECURITY_CODE_TIMEOUT",
+            advice="確認コードの有効期限またはコミュファの認証画面を確認してください。",
+            challenge_kind=ChallengeKind.VERIFICATION_CODE,
+        )
+
     def _advance_login(self, max_steps: int = 4) -> None:
         for _ in range(max_steps):
             summary = self.browser.page_summary()
             if classify_configured_login_state(summary, self.config) == "logged-in":
                 return
             result = self.browser.evaluate(build_configured_auto_login_expression(self.credentials), timeout=8) or {}
-            if not _apply_auto_login_result(self.browser, result, self.service.label):
+            if not self._apply_login_result(result):
                 return
+
+    def _apply_login_result(self, result: dict[str, Any]) -> bool:
+        if str(result.get("code") or "") in {
+            "SUBMIT_PASSWORD",
+            "SUBMIT_PASSWORD_ENTER",
+        }:
+            self._guard_credential_submission()
+        return _apply_auto_login_result(
+            self.browser,
+            result,
+            self.service.label,
+        )
+
+    def _guard_credential_submission(self) -> None:
+        if self._credential_submission_attempted:
+            raise AcquisitionError(
+                "コミュファへのログイン送信を繰り返さず、安全のため停止しました。",
+                code="LOGIN_SUBMISSION_LIMIT_REACHED",
+                advice=(
+                    "同じ取得試行ではID・パスワードを1回だけ送信します。"
+                    "追加認証画面または公式サイトの状態を確認してから再試行してください。"
+                ),
+            )
+        self._credential_submission_attempted = True
 
 
 class TokutenAutoFetcher:
@@ -315,7 +428,9 @@ class TokutenAutoFetcher:
         self._search_mail(target_month)
 
         logs: list[str] = []
-        metadata_texts: list[str] = [build_tokuten_search_query(target_month, self.config)]
+        # Do not use the requested search query as statement evidence. Only
+        # text and filenames observed in the provider response may prove month.
+        metadata_texts: list[str] = []
         downloaded: Path | None = None
         last_action: dict[str, Any] = {}
         for _ in range(16):
@@ -345,6 +460,25 @@ class TokutenAutoFetcher:
         summary = self.browser.page_summary()
         metadata_texts.append(str(summary.get("text") or ""))
         metadata_texts.append(downloaded.name)
+        validation = inspect_acquired_statement(
+            service_id=self.service.id,
+            target_month=target_month,
+            content=content,
+            metadata_text=" ".join(metadata_texts),
+            original_file_name=downloaded.name,
+        )
+        if not validation.partner_found:
+            raise AcquisitionError(
+                "取得したPDFをトクテンでんきの請求書として確認できませんでした。",
+                code="TOKUTEN_PROVIDER_NOT_CONFIRMED",
+                advice="別メールの添付PDFを保存しないよう処理を停止しました。対象メールを確認してください。",
+            )
+        if not validation.month_found:
+            raise AcquisitionError(
+                "取得したトクテンでんき請求書の対象月が指定月と一致しません。",
+                code="TOKUTEN_MONTH_MISMATCH",
+                advice="対象月が記載された請求メールと添付PDFを確認してください。",
+            )
         return FetchedStatement(
             content=content,
             source_url=str(summary.get("url") or self.config.target_url),
@@ -424,6 +558,7 @@ class WebBillingAutoFetcher:
         self.credentials = credentials or {}
         self.service = service_by_id("mobile")
         self.config = SERVICE_AUTOMATION_CONFIGS["mobile"]
+        self._credential_submission_attempted = False
 
     def open_portal(self) -> dict[str, Any]:
         self.browser.navigate(self.config.target_url, wait_seconds=1.5)
@@ -475,6 +610,25 @@ class WebBillingAutoFetcher:
         summary = self.browser.page_summary()
         metadata_texts.append(str(summary.get("text") or ""))
         metadata_texts.append(downloaded.name)
+        validation = inspect_acquired_statement(
+            service_id=self.service.id,
+            target_month=target_month,
+            content=content,
+            metadata_text=" ".join(metadata_texts),
+            original_file_name=downloaded.name,
+        )
+        if not validation.partner_found:
+            raise AcquisitionError(
+                "取得したPDFをNTTファイナンスのWebビリング証明書として確認できませんでした。",
+                code="WEBBILLING_PROVIDER_NOT_CONFIRMED",
+                advice="別ページのPDFを保存しないよう処理を停止しました。Webビリングの対象明細を確認してください。",
+            )
+        if not validation.month_found:
+            raise AcquisitionError(
+                "取得したWebビリング証明書の対象月が指定月と一致しません。",
+                code="WEBBILLING_MONTH_MISMATCH",
+                advice="Webビリングで指定したご利用年月を確認してください。",
+            )
         return FetchedStatement(
             content=content,
             source_url=str(summary.get("url") or self.config.target_url),
@@ -482,6 +636,31 @@ class WebBillingAutoFetcher:
             metadata_text=" ".join(metadata_texts),
             logs=tuple(logs),
         )
+
+    def resume_after_security_code(self, target_month: str, code: str) -> FetchedStatement:
+        """Resume the exact Chrome page after Web Billing/d-account OTP."""
+
+        try:
+            submit_current_auth_code(self.browser, "webbilling", code)
+        except AuthCodeValidationError as error:
+            raise AcquisitionError(
+                str(error),
+                code="SECURITY_CODE_SUBMISSION_FAILED",
+                challenge_kind=ChallengeKind.VERIFICATION_CODE,
+            ) from error
+        except AuthChallengeSubmissionError as error:
+            challenge_kind = (
+                ChallengeKind.CAPTCHA
+                if error.classification == AuthChallengeClassification.INTERACTIVE.value
+                else ChallengeKind.OTHER
+            )
+            raise AcquisitionError(
+                str(error),
+                code="SECURITY_CODE_SUBMISSION_FAILED",
+                challenge_kind=challenge_kind,
+            ) from error
+        self._wait_for_login_after_security_code()
+        return self.fetch_pdf(target_month)
 
     def _wait_for_login(self, timeout_seconds: float = 120) -> None:
         deadline = time.time() + timeout_seconds
@@ -493,14 +672,7 @@ class WebBillingAutoFetcher:
             if state == "logged-in":
                 return
             auto_login = self.browser.evaluate(build_webbilling_auto_login_expression(self.credentials), timeout=15) or {}
-            if auto_login.get("code") in {"PASSWORD_NOT_CONFIGURED", "D_ACCOUNT_ID_NOT_CONFIGURED"}:
-                _apply_auto_login_result(self.browser, auto_login, self.service.label)
-            if auto_login.get("waitingForSecurityCode"):
-                _apply_auto_login_result(self.browser, auto_login, self.service.label)
-            if auto_login.get("attempted") and auto_login.get("click"):
-                click = auto_login["click"]
-                self.browser.click_at(int(click["x"]), int(click["y"]))
-                time.sleep(1.2)
+            if self._apply_login_result(auto_login):
                 continue
             time.sleep(1.0)
         raise AcquisitionError(
@@ -509,22 +681,79 @@ class WebBillingAutoFetcher:
             advice="取得用ブラウザでWebビリングまたはdアカウントの認証を完了してから、もう一度取得してください。",
         )
 
+    def _wait_for_login_after_security_code(self, timeout_seconds: float = 90) -> None:
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            summary = self.browser.current_page_summary()
+            if classify_configured_login_state(summary, self.config) == "logged-in":
+                return
+            try:
+                observation = inspect_current_auth_challenge(
+                    self.browser,
+                    "webbilling",
+                )
+            except AuthChallengeSubmissionError:
+                time.sleep(0.8)
+                continue
+            if observation.classification is AuthChallengeClassification.CODE_INPUT:
+                raise AcquisitionError(
+                    "Webビリングで確認コードを受け付けられませんでした。",
+                    code="SECURITY_CODE_REJECTED",
+                    advice="最新のメールまたはSMSコードを確認してください。",
+                    challenge_kind=ChallengeKind.VERIFICATION_CODE,
+                )
+            if observation.classification is AuthChallengeClassification.INTERACTIVE:
+                raise AcquisitionError(
+                    "WebビリングまたはdアカウントでCAPTCHAが表示されました。",
+                    code="SECURITY_CHALLENGE",
+                    challenge_kind=ChallengeKind.CAPTCHA,
+                )
+            if observation.classification is AuthChallengeClassification.UNSUPPORTED:
+                raise AcquisitionError(
+                    "dアカウントで遠隔ワーカー非対応のパスキー認証が表示されました。",
+                    code="SECURITY_CHALLENGE",
+                    challenge_kind=ChallengeKind.OTHER,
+                )
+            time.sleep(0.8)
+        raise AcquisitionError(
+            "Webビリングで確認コード送信後のログイン完了を確認できませんでした。",
+            code="SECURITY_CODE_TIMEOUT",
+            challenge_kind=ChallengeKind.VERIFICATION_CODE,
+        )
+
     def _advance_login(self, max_steps: int = 4) -> None:
         for _ in range(max_steps):
             summary = self.browser.page_summary()
             if classify_configured_login_state(summary, self.config) == "logged-in":
                 return
             auto_login = self.browser.evaluate(build_webbilling_auto_login_expression(self.credentials), timeout=8) or {}
-            if auto_login.get("code") in {"PASSWORD_NOT_CONFIGURED", "D_ACCOUNT_ID_NOT_CONFIGURED"}:
-                _apply_auto_login_result(self.browser, auto_login, self.service.label)
-            if auto_login.get("waitingForSecurityCode"):
-                _apply_auto_login_result(self.browser, auto_login, self.service.label)
-            if auto_login.get("attempted") and auto_login.get("click"):
-                click = auto_login["click"]
-                self.browser.click_at(int(click["x"]), int(click["y"]))
-                time.sleep(1.2)
+            if self._apply_login_result(auto_login):
                 continue
             return
+
+    def _apply_login_result(self, result: dict[str, Any]) -> bool:
+        if str(result.get("code") or "") in {
+            "SUBMIT_PASSWORD",
+            "SUBMIT_PASSWORD_ENTER",
+        }:
+            self._guard_credential_submission()
+        return _apply_auto_login_result(
+            self.browser,
+            result,
+            self.service.label,
+        )
+
+    def _guard_credential_submission(self) -> None:
+        if self._credential_submission_attempted:
+            raise AcquisitionError(
+                "Webビリングへのログイン送信を繰り返さず、安全のため停止しました。",
+                code="LOGIN_SUBMISSION_LIMIT_REACHED",
+                advice=(
+                    "同じ取得試行ではID・パスワードを1回だけ送信します。"
+                    "追加認証画面または公式サイトの状態を確認してから再試行してください。"
+                ),
+            )
+        self._credential_submission_attempted = True
 
 
 def _filename_matches_month(file_name: str, year: int, month: int) -> bool:
@@ -713,8 +942,28 @@ const byText = (words, excludes = []) => controls()
   .filter((item) => excludes.every((word) => !item.text.includes(normalize(word))))
   .sort((a, b) => a.text.length - b.text.length)[0]?.el || null;
 const pageText = normalize(document.body?.innerText || "");
-const securityWords = ["ワンタイム", "認証コード", "確認コード", "セキュリティコード", "本人確認", "captcha", "recaptcha"];
-if (securityWords.some((word) => pageText.includes(normalize(word)))) return { attempted: false, code: "SECURITY_CHALLENGE", reason: "追加認証が表示されています。" };
+if (location.protocol !== "https:" || location.hostname !== "mypage.commufa.jp") {
+  return { attempted: false, code: "SECURITY_ORIGIN_MISMATCH", challengeKind: "other", reason: "公式ログインページではありません。" };
+}
+const captchaPresent = Boolean(document.querySelector("iframe[src*='recaptcha'], iframe[src*='hcaptcha'], [data-sitekey], .g-recaptcha, .h-captcha")) || ["captcha", "recaptcha", "hcaptcha", "画像認証", "ロボットではありません"].some((word) => pageText.includes(normalize(word)));
+if (captchaPresent) return { attempted: false, code: "SECURITY_CHALLENGE", challengeKind: "captcha", reason: "CAPTCHAが表示されています。" };
+const otpWords = ["ワンタイム", "確認コード", "認証コード", "セキュリティコード", "verification code", "one-time", "otp"];
+const otpInputs = [...document.querySelectorAll("input")].filter(visible).filter((input) => {
+  const type = String(input.type || "text").toLowerCase();
+  if (!["text", "tel", "number", "password"].includes(type)) return false;
+  const label = normalize(labelOf(input) + " " + contextOf(input, 4));
+  const autocomplete = normalize(input.getAttribute("autocomplete"));
+  const inputMode = normalize(input.getAttribute("inputmode"));
+  const maxLength = Number(input.getAttribute("maxlength") || 0);
+  const identified = autocomplete === "one-time-code" || otpWords.some((word) => label.includes(normalize(word)));
+  const numericCompatible = type === "number" || inputMode === "numeric" || autocomplete === "one-time-code" || /code|otp|コード|認証/.test(label);
+  return identified && numericCompatible && (maxLength === 0 || maxLength === 6);
+});
+if (otpInputs.length === 1 && location.protocol === "https:" && location.hostname === "mypage.commufa.jp") {
+  return { attempted: false, code: "SECURITY_CHALLENGE", waitingForSecurityCode: true, challengeKind: "verification_code", reason: "確認コード入力待ちです。" };
+}
+const securityWords = ["ワンタイム", "認証コード", "確認コード", "セキュリティコード", "本人確認", "秘密の質問", "追加認証"];
+if (securityWords.some((word) => pageText.includes(normalize(word)))) return { attempted: false, code: "SECURITY_CHALLENGE", challengeKind: "interactive", reason: "追加認証が表示されています。" };
 const passwordInput = [...document.querySelectorAll("input[type='password']")].find(visible);
 const textInputs = [...document.querySelectorAll("input, textarea")]
   .filter(visible)
@@ -788,8 +1037,12 @@ const byText = (words, excludes = []) => controls()
   .filter((item) => excludes.every((word) => !item.text.includes(normalize(word))))
   .sort((a, b) => a.text.length - b.text.length)[0]?.el || null;
 const pageText = normalize(document.body?.innerText || "");
-const securityWords = ["ワンタイム", "認証コード", "確認コード", "セキュリティコード", "本人確認", "captcha", "recaptcha"];
-if (securityWords.some((word) => pageText.includes(normalize(word)))) return { attempted: false, code: "SECURITY_CHALLENGE", reason: "追加認証が表示されています。" };
+const captchaPresent = Boolean(document.querySelector("iframe[src*='recaptcha'], iframe[src*='hcaptcha'], [data-sitekey], .g-recaptcha, .h-captcha")) || ["captcha", "recaptcha", "hcaptcha", "画像認証", "ロボットではありません"].some((word) => pageText.includes(normalize(word)));
+if (captchaPresent) return { attempted: false, code: "SECURITY_CHALLENGE", challengeKind: "captcha", reason: "CAPTCHAが表示されています。" };
+const passkeyWords = ["passkey", "パスキー", "webauthn", "セキュリティキー", "生体認証"];
+if (passkeyWords.some((word) => pageText.includes(normalize(word)))) return { attempted: false, code: "SECURITY_CHALLENGE", challengeKind: "passkey_unavailable", reason: "遠隔ワーカー非対応のパスキー認証が表示されています。" };
+const securityWords = ["ワンタイム", "認証コード", "確認コード", "セキュリティコード", "本人確認"];
+if (securityWords.some((word) => pageText.includes(normalize(word)))) return { attempted: false, code: "SECURITY_CHALLENGE", challengeKind: "interactive", reason: "追加認証が表示されています。" };
 const submit = document.querySelector("#idSIButton9, input[type='submit']");
 const staySignedIn = byText(["はい", "yes", "続行", "continue", "サインインの状態を維持"], ["いいえ", "no"]);
 if (staySignedIn) return { attempted: true, code: "STAY_SIGNED_IN", click: pointOf(staySignedIn) };
@@ -1069,8 +1322,19 @@ const scoreControl = (el, keywords, excludes = []) => {
 };
 const bestControl = (keywords, excludes = [], predicate = () => true) => controls().filter(predicate).map((el) => scoreControl(el, keywords, excludes)).filter(Boolean).sort((a, b) => b.score - a.score || a.text.length - b.text.length)[0];
 const pageText = normalize(document.body?.innerText || "");
+const captchaPresent = Boolean(document.querySelector("iframe[src*='recaptcha'], iframe[src*='hcaptcha'], [data-sitekey], .g-recaptcha, .h-captcha")) || ["captcha", "recaptcha", "hcaptcha", "画像認証", "ロボットではありません"].some((word) => pageText.includes(normalize(word)));
+if (captchaPresent) return { attempted: false, code: "SECURITY_CHALLENGE", challengeKind: "captcha", reason: "CAPTCHAが表示されています。" };
+const passkeyWords = ["passkey", "パスキー", "webauthn", "セキュリティキー", "生体認証"];
+if (passkeyWords.some((word) => pageText.includes(normalize(word)))) return { attempted: false, code: "SECURITY_CHALLENGE", challengeKind: "passkey_unavailable", reason: "遠隔ワーカー非対応のパスキー認証が表示されています。" };
 const securityWords = ["セキュリティコード", "確認コード", "認証コード", "ワンタイム", "2段階", "二段階", "本人確認", "verification code"];
-if (securityWords.some((word) => pageText.includes(normalize(word)))) return { attempted: false, waitingForSecurityCode: true, code: "WAIT_SECURITY_CODE", reason: "セキュリティコード入力待ちです。" };
+const codeHints = ["ワンタイムパスワード", "セキュリティコード", "確認コード", "認証コード", "one-time password", "verification code", "otp"];
+const codeInputs = [...document.querySelectorAll("input")]
+  .filter(visible)
+  .filter((input) => ["text", "tel", "number", "password"].includes(String(input.type || "text").toLowerCase()))
+  .filter((input) => codeHints.some((word) => normalize(labelOf(input) + " " + contextOf(input, 4)).includes(normalize(word))));
+const exactSecurityOrigin = location.protocol === "https:" && ["webbilling.ntt-finance.co.jp", "id.smt.docomo.ne.jp"].includes(location.hostname);
+if (codeInputs.length === 1 && exactSecurityOrigin) return { attempted: false, waitingForSecurityCode: true, code: "WAIT_SECURITY_CODE", challengeKind: "verification_code", reason: "セキュリティコード入力待ちです。" };
+if (securityWords.some((word) => pageText.includes(normalize(word)))) return { attempted: false, code: "SECURITY_CHALLENGE", challengeKind: "interactive", reason: "コード入力以外の追加認証が表示されています。" };
 const passwordInput = [...document.querySelectorAll("input[type='password']")].find(visible);
 const dAccountLogin = bestControl(["dアカウントログイン", "dアカウントでログイン", "dアカウント", "d account"], ["新規", "作成", "登録", "お忘れ", "戻る", "キャンセル"]);
 if (dAccountLogin && !passwordInput) return { attempted: true, code: "CLICK_D_ACCOUNT_LOGIN", click: pointOf(dAccountLogin.el) };

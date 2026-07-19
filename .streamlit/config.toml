@@ -19,3 +19,4 @@ gatherUsageStats = false
 
 [server]
 runOnSave = false
+disconnectedSessionTTL = 600

@@ -1,22 +1,40 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import re
 import time
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
-import requests
-
+from .auth_challenges import (
+    AuthChallengeClassification,
+    AuthChallengeSubmissionError,
+    AuthCodeValidationError,
+    inspect_current_auth_challenge,
+    submit_current_auth_code,
+)
 from .browser_session import ManagedBrowser
+from .security_challenge import ChallengeKind, normalize_challenge_kind
+from .statement_validation import inspect_acquired_statement
 from ..config import expected_transaction_month, parse_month_key, service_by_id
 
 
 class AcquisitionError(RuntimeError):
-    def __init__(self, message: str, *, code: str = "ACQUISITION_ERROR", advice: str = "") -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "ACQUISITION_ERROR",
+        advice: str = "",
+        challenge_kind: ChallengeKind | str | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.advice = advice
+        self.challenge_kind = normalize_challenge_kind(challenge_kind)
 
 
 @dataclass(frozen=True)
@@ -119,8 +137,24 @@ const byText = (words, excludes = []) => controls()
   .filter((item) => excludes.every((word) => !item.text.includes(normalize(word))))
   .sort((a, b) => a.text.length - b.text.length)[0]?.el || null;
 const pageText = normalize(document.body?.innerText || "");
-const securityWords = ["ワンタイム", "認証コード", "確認コード", "セキュリティコード", "本人確認", "秘密の質問", "captcha", "recaptcha"];
-if (securityWords.some((word) => pageText.includes(normalize(word)))) return { attempted: false, code: "SECURITY_CHALLENGE", reason: "追加認証が表示されています。" };
+const captchaWords = ["captcha", "recaptcha", "hcaptcha", "画像認証", "ロボットではありません"];
+if (captchaWords.some((word) => pageText.includes(normalize(word))) || document.querySelector("iframe[src*='recaptcha'], iframe[src*='hcaptcha'], [data-sitekey], .g-recaptcha, .h-captcha")) {
+  return { attempted: false, code: "SECURITY_CHALLENGE", challengeKind: "captcha", reason: "CAPTCHAが表示されています。" };
+}
+const securityWords = ["ワンタイム", "認証コード", "確認コード", "セキュリティコード", "本人確認", "秘密の質問"];
+const codeHints = ["セキュリティコード", "カード裏面", "3桁", "security code"];
+const codeInputs = [...document.querySelectorAll("input")]
+  .filter(visible)
+  .filter((input) => ["text", "tel", "number", "password"].includes(String(input.type || "text").toLowerCase()))
+  .filter((input) => codeHints.some((word) => normalize(labelOf(input) + " " + contextOf(input, 4)).includes(normalize(word))));
+if (
+  codeInputs.length === 1 &&
+  location.protocol === "https:" &&
+  location.hostname === "www.eposcard.co.jp"
+) {
+  return { attempted: false, code: "SECURITY_CHALLENGE", challengeKind: "verification_code", reason: "セキュリティコード入力待ちです。" };
+}
+if (securityWords.some((word) => pageText.includes(normalize(word)))) return { attempted: false, code: "SECURITY_CHALLENGE", challengeKind: "interactive", reason: "追加認証が表示されています。" };
 const passwordInput = [...document.querySelectorAll("input[type='password']")].find(visible);
 const textInputs = [...document.querySelectorAll("input, textarea")]
   .filter(visible)
@@ -209,7 +243,7 @@ class EposAutoFetcher:
         self.credentials = credentials or {}
         self.service = service_by_id("epos")
         self.last_login_diagnostics: dict[str, Any] = {}
-        self.login_submit_attempts = 0
+        self._credential_submission_attempted = False
 
     def open_portal(self) -> dict[str, Any]:
         self.browser.navigate(self.service.portal_url, wait_seconds=1.5)
@@ -223,8 +257,7 @@ class EposAutoFetcher:
         self._wait_for_login()
 
         form = self._prepare_pdf_form(year, month)
-        cookies = self.browser.cookies_for(form["action"])
-        content = self._post_pdf_form(form, cookies)
+        content = self._post_pdf_form_in_chrome(form)
         if content[:4] != b"%PDF":
             head = content[:300].decode("utf-8", errors="ignore")
             if "<html" in head.lower() or "<!doctype" in head.lower():
@@ -239,6 +272,25 @@ class EposAutoFetcher:
                 advice="エポスカード側のPDF照会仕様が変わった可能性があります。",
             )
 
+        validation = inspect_acquired_statement(
+            service_id=self.service.id,
+            target_month=target_month,
+            content=content,
+            metadata_text=str(form.get("metadataText") or ""),
+        )
+        if not validation.partner_found:
+            raise AcquisitionError(
+                "取得したPDFをエポスカードの明細として確認できませんでした。",
+                code="EPOS_PROVIDER_NOT_CONFIRMED",
+                advice="別ページのPDFを保存しないよう処理を停止しました。エポスNetの対象明細を確認してください。",
+            )
+        if not validation.month_found:
+            raise AcquisitionError(
+                "取得したエポスカード明細の支払月が指定月と一致しません。",
+                code="EPOS_PAYMENT_MONTH_MISMATCH",
+                advice=f"指定した利用月 {target_month} に対応する支払月 {payment_month} を確認してください。",
+            )
+
         return FetchedStatement(
             content=content,
             source_url=form["pageUrl"],
@@ -246,6 +298,31 @@ class EposAutoFetcher:
             metadata_text=form["metadataText"],
             logs=tuple(form.get("logs") or ()),
         )
+
+    def resume_after_security_code(self, target_month: str, code: str) -> FetchedStatement:
+        """Submit EPOS's official code to the exact live Chrome page."""
+
+        try:
+            submit_current_auth_code(self.browser, "epos", code)
+        except AuthCodeValidationError as error:
+            raise AcquisitionError(
+                str(error),
+                code="SECURITY_CODE_SUBMISSION_FAILED",
+                challenge_kind=ChallengeKind.VERIFICATION_CODE,
+            ) from error
+        except AuthChallengeSubmissionError as error:
+            challenge_kind = (
+                ChallengeKind.CAPTCHA
+                if error.classification == AuthChallengeClassification.INTERACTIVE.value
+                else ChallengeKind.OTHER
+            )
+            raise AcquisitionError(
+                str(error),
+                code="SECURITY_CODE_SUBMISSION_FAILED",
+                challenge_kind=challenge_kind,
+            ) from error
+        self._wait_for_login_after_security_code()
+        return self.fetch_pdf(target_month)
 
     def _apply_login_result(self, result: dict[str, Any]) -> bool:
         code = str(result.get("code") or "")
@@ -256,11 +333,15 @@ class EposAutoFetcher:
                 advice="Streamlit CloudのSecretsにエポスNet IDとパスワードを設定してください。",
             )
         if code == "SECURITY_CHALLENGE":
+            challenge_kind = normalize_challenge_kind(result.get("challengeKind"))
             raise AcquisitionError(
                 "エポスカードで追加認証が表示されました。",
                 code="SECURITY_CHALLENGE",
                 advice="ワンタイムコード、CAPTCHA、本人確認などサイト側の追加認証が出ているため、通常ログインの自動入力では続行できません。",
+                challenge_kind=challenge_kind,
             )
+        if code in {"SUBMIT_PASSWORD", "SUBMIT_PASSWORD_ENTER"}:
+            self._guard_credential_submission()
         if result.get("attempted") and result.get("click"):
             click = result["click"]
             self.browser.click_at(int(click["x"]), int(click["y"]))
@@ -349,36 +430,23 @@ return {
         )
 
     def _submit_epos_login_button(self, layout: dict[str, Any]) -> None:
-        button_rect = layout["buttonRect"]
-        button_y = int(layout["buttonPoint"]["y"])
-        left_x = int(button_rect["left"]) + 24
-        right_x = int(button_rect["right"]) - 24
-        center_x = int(layout["buttonPoint"]["x"])
-        pattern = self.login_submit_attempts % 4
-        self.login_submit_attempts += 1
+        self._guard_credential_submission()
+        point = layout["buttonPoint"]
+        self.browser.click_at(int(point["x"]), int(point["y"]))
 
-        for x, y_offset in (
-            (left_x, -10),
-            (int(button_rect["left"]) + 90, 7),
-            (center_x, -4),
-            (right_x, 5),
-            (center_x, 0),
-        ):
-            self.browser.move_at(x, button_y + y_offset)
-            time.sleep(0.08)
-
-        if pattern == 1:
-            self.browser.click_at(right_x, button_y)
-        elif pattern == 2:
-            self.browser.drag_at(left_x, button_y, right_x, button_y, steps=34)
-            time.sleep(0.35)
-            self.browser.click_at(center_x, button_y)
-        elif pattern == 3:
-            self.browser.drag_at(right_x, button_y, left_x, button_y, steps=34)
-            time.sleep(0.35)
-            self.browser.click_at(center_x, button_y)
-        else:
-            self.browser.click_at(center_x, button_y)
+    def _guard_credential_submission(self) -> None:
+        if self._credential_submission_attempted:
+            raise AcquisitionError(
+                "エポスカードへのログイン送信を繰り返さず、安全のため停止しました。",
+                code="LOGIN_SUBMISSION_LIMIT_REACHED",
+                advice=(
+                    "同じ取得試行ではID・パスワードを1回だけ送信します。"
+                    "追加認証画面または公式サイトの状態を確認してから再試行してください。"
+                ),
+            )
+        # Mark before the click/Enter so an uncertain browser response can
+        # never cause a second credential submission in the same attempt.
+        self._credential_submission_attempted = True
 
     def _perform_human_login_attempt(self) -> bool:
         payload = _login_payload(self.credentials)
@@ -460,16 +528,9 @@ return {
         deadline = time.time() + timeout_seconds
         last_state = "unknown"
         last_reason = ""
-        login_rejections = 0
         while time.time() < deadline:
             summary = self.browser.page_summary()
-            try:
-                self._raise_login_error_if_present(summary)
-            except AcquisitionError as error:
-                if error.code != "LOGIN_REJECTED" or login_rejections >= 3:
-                    raise
-                login_rejections += 1
-                last_reason = error.advice
+            self._raise_login_error_if_present(summary)
             state = classify_login_state(summary)
             last_state = state
             if state == "logged-in":
@@ -492,6 +553,43 @@ return {
                 "Streamlit Cloud Secretsのログイン情報とエポスカードのログイン画面を確認してください。"
                 + (f" 診断: {diagnostics}" if diagnostics else "")
             ),
+        )
+
+    def _wait_for_login_after_security_code(self, timeout_seconds: float = 60) -> None:
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            summary = self.browser.current_page_summary()
+            if classify_login_state(summary) == "logged-in":
+                return
+            try:
+                observation = inspect_current_auth_challenge(self.browser, "epos")
+            except AuthChallengeSubmissionError:
+                time.sleep(0.8)
+                continue
+            if observation.classification is AuthChallengeClassification.CODE_INPUT:
+                raise AcquisitionError(
+                    "エポスカードでセキュリティコードを確認できませんでした。",
+                    code="SECURITY_CODE_REJECTED",
+                    advice="カード記載の最新情報を確認してください。",
+                    challenge_kind=ChallengeKind.VERIFICATION_CODE,
+                )
+            if observation.classification is AuthChallengeClassification.INTERACTIVE:
+                raise AcquisitionError(
+                    "エポスカードでCAPTCHAが表示されました。",
+                    code="SECURITY_CHALLENGE",
+                    challenge_kind=ChallengeKind.CAPTCHA,
+                )
+            if observation.classification is AuthChallengeClassification.UNSUPPORTED:
+                raise AcquisitionError(
+                    "エポスカードで遠隔ワーカー非対応の認証が表示されました。",
+                    code="SECURITY_CHALLENGE",
+                    challenge_kind=ChallengeKind.OTHER,
+                )
+            time.sleep(0.8)
+        raise AcquisitionError(
+            "エポスカードでセキュリティコード送信後のログイン完了を確認できませんでした。",
+            code="SECURITY_CODE_TIMEOUT",
+            challenge_kind=ChallengeKind.VERIFICATION_CODE,
         )
 
     def _prepare_pdf_form(self, year: int, month: int) -> dict[str, Any]:
@@ -563,31 +661,85 @@ return {
             )
         return result
 
-    def _post_pdf_form(self, form: dict[str, Any], cookies: list[dict[str, Any]]) -> bytes:
-        session = requests.Session()
-        for cookie in cookies:
-            session.cookies.set(
-                cookie.get("name", ""),
-                cookie.get("value", ""),
-                domain=cookie.get("domain") or "www.eposcard.co.jp",
-                path=cookie.get("path") or "/",
+    def _post_pdf_form_in_chrome(self, form: dict[str, Any]) -> bytes:
+        """Submit and download through the same authenticated Google Chrome.
+
+        Moving cookies into a separate HTTP client changes the browser/TLS
+        identity seen by the provider. Keeping the request inside Chrome also
+        preserves HttpOnly cookies without exposing them to Python.
+        """
+
+        action = str(form.get("action") or "")
+        parsed = urlsplit(action)
+        if (
+            parsed.scheme != "https"
+            or (parsed.hostname or "").lower() != "www.eposcard.co.jp"
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.port not in (None, 443)
+        ):
+            raise AcquisitionError(
+                "エポスカードのPDF送信先が公式HTTPSページではありません。",
+                code="PDF_REQUEST_ORIGIN_MISMATCH",
             )
-        headers = {
-            "User-Agent": "Mozilla/5.0 GetReceipt",
-            "Referer": form["pageUrl"],
-            "Accept": "application/pdf,application/octet-stream,*/*",
-        }
-        try:
-            response = session.post(form["action"], data=form["fields"], headers=headers, timeout=60)
-        except requests.RequestException as error:
+        payload = json.dumps(
+            {
+                "action": action,
+                "fields": [
+                    [str(name), str(value)]
+                    for name, value in form.get("fields") or ()
+                ],
+            },
+            ensure_ascii=True,
+            separators=(",", ":"),
+        )
+        result = self.browser.evaluate(
+            f"""(async () => {{
+              const payload = {payload};
+              const body = new URLSearchParams();
+              for (const [name, value] of payload.fields) body.append(name, value);
+              const response = await fetch(payload.action, {{
+                method: "POST",
+                body,
+                credentials: "include",
+                redirect: "follow",
+                headers: {{ "Accept": "application/pdf,application/octet-stream,*/*" }}
+              }});
+              const bytes = new Uint8Array(await response.arrayBuffer());
+              let binary = "";
+              const chunkSize = 0x8000;
+              for (let offset = 0; offset < bytes.length; offset += chunkSize) {{
+                binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+              }}
+              return {{
+                ok: response.ok,
+                status: response.status,
+                responseUrl: response.url,
+                contentType: response.headers.get("content-type") || "",
+                base64: btoa(binary)
+              }};
+            }})()""",
+            timeout=75,
+        ) or {}
+        response_url = urlsplit(str(result.get("responseUrl") or ""))
+        if (
+            response_url.scheme != "https"
+            or (response_url.hostname or "").lower() != "www.eposcard.co.jp"
+        ):
             raise AcquisitionError(
-                f"エポスカードへのPDF照会リクエストに失敗しました: {error}",
-                code="PDF_REQUEST_FAILED",
-            ) from error
-        if response.status_code >= 400:
+                "エポスカードのPDF応答が公式サイト以外へ移動しました。",
+                code="PDF_RESPONSE_ORIGIN_MISMATCH",
+            )
+        if not result.get("ok"):
             raise AcquisitionError(
-                f"エポスカードのPDF照会がHTTP {response.status_code}で失敗しました。",
+                f"エポスカードのPDF照会がHTTP {int(result.get('status') or 0)}で失敗しました。",
                 code="PDF_REQUEST_HTTP_ERROR",
             )
-        return response.content
+        try:
+            return base64.b64decode(str(result.get("base64") or ""), validate=True)
+        except (binascii.Error, ValueError, TypeError) as error:
+            raise AcquisitionError(
+                "エポスカードのPDF応答を復元できませんでした。",
+                code="PDF_RESPONSE_DECODE_FAILED",
+            ) from error
 

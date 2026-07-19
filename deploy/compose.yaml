@@ -1,0 +1,64 @@
+services:
+  worker:
+    image: ${GETRECEIPT_IMAGE_REF:?set GETRECEIPT_IMAGE_REF}
+    platform: linux/amd64
+    # Docker does not restart a merely unhealthy container. The worker exits
+    # itself gracefully after repeated backup failure or a dead worker loop,
+    # allowing this policy to create a clean process without Docker-socket
+    # access or a privileged auto-heal sidecar.
+    restart: unless-stopped
+    init: true
+    user: "10001:10001"
+    env_file:
+      - worker.env
+    environment:
+      BROWSER_EXECUTABLE: /usr/bin/google-chrome
+    expose:
+      - "8080"
+    volumes:
+      - ${GETRECEIPT_DATA_DIR:?set GETRECEIPT_DATA_DIR}:/var/lib/getreceipt
+    shm_size: "1gb"
+    cap_drop:
+      - ALL
+    pids_limit: 512
+    # Allows the worker to stop acquisition and publish its final verified
+    # SQLite snapshot before the container is killed.
+    stop_grace_period: 90s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    networks:
+      - private
+
+  caddy:
+    image: caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
+    restart: unless-stopped
+    depends_on:
+      worker:
+        condition: service_healthy
+    environment:
+      WORKER_DOMAIN: ${WORKER_DOMAIN:?set WORKER_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    networks:
+      - private
+
+networks:
+  private:
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -13,7 +13,7 @@ from src.config import (  # noqa: E402
     service_by_id,
     usage_month_for_transaction,
 )
-from src.automation.epos import EposAutoFetcher  # noqa: E402
+from src.automation.epos import AcquisitionError, EposAutoFetcher  # noqa: E402
 from src.automation.official_sites import build_tokuten_search_query  # noqa: E402
 from src.workflows.drive_status import (  # noqa: E402
     ReceiptMonthState,
@@ -123,24 +123,50 @@ class ServiceMonthMappingTest(unittest.TestCase):
 
     def test_epos_fetcher_converts_usage_month_to_payment_month(self) -> None:
         browser = Mock()
-        browser.cookies_for.return_value = []
         fetcher = EposAutoFetcher(browser)
         form = {
             "action": "https://example.test/pdf",
             "pageUrl": "https://example.test/detail",
-            "metadataText": "",
+            "metadataText": "エポスカード 2026年6月 ご利用明細",
             "logs": [],
         }
 
         with (
             patch.object(fetcher, "_wait_for_login"),
             patch.object(fetcher, "_prepare_pdf_form", return_value=form) as prepare,
-            patch.object(fetcher, "_post_pdf_form", return_value=b"%PDF-1.7 test"),
+            patch.object(fetcher, "_post_pdf_form_in_chrome", return_value=b"%PDF-1.7 test"),
         ):
             statement = fetcher.fetch_pdf("2026-07")
 
         prepare.assert_called_once_with(2026, 6)
         self.assertEqual(statement.original_file_name, "epos_2026-06.pdf")
+
+    def test_epos_synthetic_output_name_cannot_prove_statement_month(self) -> None:
+        browser = Mock()
+        fetcher = EposAutoFetcher(browser)
+        form = {
+            "action": "https://example.test/pdf",
+            "pageUrl": "https://example.test/detail",
+            "metadataText": "エポスカード ご利用明細",
+            "logs": [],
+        }
+
+        with (
+            patch.object(fetcher, "_wait_for_login"),
+            patch.object(fetcher, "_prepare_pdf_form", return_value=form),
+            patch.object(
+                fetcher,
+                "_post_pdf_form_in_chrome",
+                return_value="%PDF-1.7\nエポスカード 2026年5月\n".encode(),
+            ),
+            self.assertRaises(AcquisitionError) as raised,
+        ):
+            fetcher.fetch_pdf("2026-07")
+
+        self.assertEqual(
+            "EPOS_PAYMENT_MONTH_MISMATCH",
+            getattr(raised.exception, "code", ""),
+        )
 
     def test_tokuten_search_uses_following_month_for_usage_month(self) -> None:
         self.assertEqual(build_tokuten_search_query("2026-07"), "トクテン 2026年8月")

@@ -9,6 +9,8 @@ class Stage(str, Enum):
 
     CHECKING_DRIVE = "checking_drive"
     FETCHING = "fetching"
+    AWAITING_SECURITY_CODE = "awaiting_security_code"
+    AWAITING_USER_ACTION = "awaiting_user_action"
     EXTRACTING = "extracting"
     SAVING = "saving"
     VERIFYING = "verifying"
@@ -19,6 +21,7 @@ class Stage(str, Enum):
 class AcquisitionOutcome(str, Enum):
     ACQUIRED = "acquired"
     ALREADY_EXISTS = "already_exists"
+    ACTION_REQUIRED = "action_required"
     FAILED = "failed"
 
 
@@ -43,6 +46,12 @@ class AcquisitionFailure:
 
 
 @dataclass(frozen=True)
+class SecurityChallenge:
+    kind: str
+    message: str
+
+
+@dataclass(frozen=True)
 class AcquisitionResult:
     service_id: str
     target_month: str
@@ -50,10 +59,18 @@ class AcquisitionResult:
     events: tuple[ProgressEvent, ...] = field(default_factory=tuple)
     receipt: StoredReceiptReference | None = None
     failure: AcquisitionFailure | None = None
+    challenge: SecurityChallenge | None = None
 
     @property
     def success(self) -> bool:
-        return self.outcome is not AcquisitionOutcome.FAILED
+        return self.outcome in {
+            AcquisitionOutcome.ACQUIRED,
+            AcquisitionOutcome.ALREADY_EXISTS,
+        }
+
+    @property
+    def action_required(self) -> bool:
+        return self.outcome is AcquisitionOutcome.ACTION_REQUIRED
 
     @property
     def skipped(self) -> bool:

@@ -1,3 +1,4 @@
+.venv/
 data/
 logs/
 _output/
@@ -7,6 +8,11 @@ __pycache__/
 .streamlit/secrets.toml
 cloud/.streamlit/secrets.toml
 .env
+worker.env
+worker/*.env
+deploy/.env
+deploy/worker.env
+*.sqlite3
 *.log
 
 

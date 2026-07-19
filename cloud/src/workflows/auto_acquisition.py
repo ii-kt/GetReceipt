@@ -10,6 +10,7 @@ from ..domain.acquisition import (
     AcquisitionOutcome,
     AcquisitionResult,
     ProgressEvent,
+    SecurityChallenge,
     Stage,
     StoredReceiptReference,
 )
@@ -33,7 +34,17 @@ class ReceiptStorage(Protocol):
 
 ProgressCallback = Callable[[ProgressEvent], None]
 ReceiptFinder = Callable[[list[dict[str, str]], Any, str], Any | None]
+StatementFetcher = Callable[[str], Any]
+CancellationCheck = Callable[[], bool]
 _ACQUISITION_LOCK = Lock()
+_ACTION_REQUIRED_CHALLENGE_KINDS = {
+    "verification_code",
+    "captcha",
+    "interactive",
+    "consent",
+    "push_approval",
+    "passkey_unavailable",
+}
 
 
 def run_auto_acquisition(
@@ -44,6 +55,8 @@ def run_auto_acquisition(
     storage: ReceiptStorage,
     on_progress: ProgressCallback | None = None,
     receipt_finder: ReceiptFinder | None = None,
+    fetch_statement: StatementFetcher | None = None,
+    cancellation_requested: CancellationCheck | None = None,
 ) -> AcquisitionResult:
     """Serialize browser acquisition and keep Drive as the only saved-state truth."""
 
@@ -55,6 +68,8 @@ def run_auto_acquisition(
             storage=storage,
             on_progress=on_progress,
             receipt_finder=receipt_finder,
+            fetch_statement=fetch_statement,
+            cancellation_requested=cancellation_requested,
         )
 
 
@@ -66,6 +81,8 @@ def _run_auto_acquisition_unlocked(
     storage: ReceiptStorage,
     on_progress: ProgressCallback | None = None,
     receipt_finder: ReceiptFinder | None = None,
+    fetch_statement: StatementFetcher | None = None,
+    cancellation_requested: CancellationCheck | None = None,
 ) -> AcquisitionResult:
     """Acquire and persist one service usage month using Drive as the only truth.
 
@@ -97,24 +114,46 @@ def _run_auto_acquisition_unlocked(
             failure=AcquisitionFailure(code=code, message=message, stage=stage),
         )
 
+    def cancelled(stage: Stage) -> AcquisitionResult | None:
+        if cancellation_requested is None:
+            return None
+        try:
+            requested = bool(cancellation_requested())
+        except Exception:
+            requested = True
+        if not requested:
+            return None
+        return failed(
+            code="ACQUISITION_CANCELLED",
+            message="キャンセルされたため、Google Driveへ保存せず処理を終了しました。",
+            stage=stage,
+        )
+
     try:
         service = service_by_id(service_id)
         parse_month_key(target_month)
-    except (KeyError, TypeError, ValueError) as error:
-        return failed(code="INVALID_REQUEST", message=str(error), stage=Stage.CHECKING_DRIVE)
+    except (KeyError, TypeError, ValueError):
+        return failed(
+            code="INVALID_REQUEST",
+            message="取得先または対象月の指定が不正です。",
+            stage=Stage.CHECKING_DRIVE,
+        )
 
     if receipt_finder is None:
         from .drive_status import find_receipt
 
         receipt_finder = find_receipt
 
+    if cancellation := cancelled(Stage.CHECKING_DRIVE):
+        return cancellation
+
     emit(Stage.CHECKING_DRIVE, "Google Driveで取得済みPDFを確認しています。")
     try:
         existing = receipt_finder(storage.list_files(), service, target_month)
-    except Exception as error:
+    except Exception:
         return failed(
             code="DRIVE_CHECK_FAILED",
-            message=f"Google Driveの取得済み確認に失敗しました: {error}",
+            message="Google Driveの取得済み確認に失敗しました。",
             stage=Stage.CHECKING_DRIVE,
         )
 
@@ -129,13 +168,33 @@ def _run_auto_acquisition_unlocked(
             receipt=receipt,
         )
 
+    if cancellation := cancelled(Stage.FETCHING):
+        return cancellation
+
     emit(Stage.FETCHING, "請求元から対象月のPDFを自動取得しています。")
     try:
-        statement = fetcher.fetch_pdf(target_month)
+        statement_fetcher = fetch_statement if fetch_statement is not None else fetcher.fetch_pdf
+        statement = statement_fetcher(target_month)
     except Exception as error:
+        challenge_kind = str(getattr(error, "challenge_kind", "") or "")
+        if challenge_kind in _ACTION_REQUIRED_CHALLENGE_KINDS:
+            message = str(error) or "追加認証コードの入力が必要です。"
+            stage = (
+                Stage.AWAITING_SECURITY_CODE
+                if challenge_kind == "verification_code"
+                else Stage.AWAITING_USER_ACTION
+            )
+            emit(stage, message)
+            return AcquisitionResult(
+                service_id=service.id,
+                target_month=target_month,
+                outcome=AcquisitionOutcome.ACTION_REQUIRED,
+                events=tuple(events),
+                challenge=SecurityChallenge(kind=challenge_kind, message=message),
+            )
         return failed(
             code=_error_code(error, "FETCH_FAILED"),
-            message=f"PDFの自動取得に失敗しました: {error}",
+            message="PDFの自動取得に失敗しました。",
             stage=Stage.FETCHING,
         )
 
@@ -147,6 +206,9 @@ def _run_auto_acquisition_unlocked(
             stage=Stage.FETCHING,
         )
 
+    if cancellation := cancelled(Stage.FETCHING):
+        return cancellation
+
     emit(Stage.EXTRACTING, "PDFから保存用メタデータを抽出しています。")
     try:
         extracted = extract_receipt_data(content, str(getattr(statement, "metadata_text", "")))
@@ -156,20 +218,20 @@ def _run_auto_acquisition_unlocked(
             extracted=extracted,
         )
         file_name = build_receipt_filename(metadata, "pdf")
-    except Exception as error:
+    except Exception:
         return failed(
             code="METADATA_EXTRACTION_FAILED",
-            message=f"PDFの保存情報を確定できませんでした: {error}",
+            message="PDFの保存情報を確定できませんでした。",
             stage=Stage.EXTRACTING,
         )
 
     emit(Stage.CHECKING_DRIVE, "保存直前にGoogle Driveを再確認しています。")
     try:
         existing = receipt_finder(storage.list_files(), service, target_month)
-    except Exception as error:
+    except Exception:
         return failed(
             code="DRIVE_RECHECK_FAILED",
-            message=f"保存直前のGoogle Drive確認に失敗しました: {error}",
+            message="保存直前のGoogle Drive確認に失敗しました。",
             stage=Stage.CHECKING_DRIVE,
         )
 
@@ -184,23 +246,33 @@ def _run_auto_acquisition_unlocked(
             receipt=receipt,
         )
 
+    if cancellation := cancelled(Stage.SAVING):
+        return cancellation
+
     emit(Stage.SAVING, "PDFをGoogle Driveへ保存しています。")
     try:
         storage.upsert_bytes(file_name=file_name, content=content, mime_type="application/pdf")
     except Exception as error:
+        code = _error_code(error, "DRIVE_SAVE_FAILED")
+        if code == "ACQUISITION_CANCELLED":
+            return cancelled(Stage.SAVING) or failed(
+                code=code,
+                message="Google Driveへの保存開始前に処理がキャンセルされました。",
+                stage=Stage.SAVING,
+            )
         return failed(
-            code="DRIVE_SAVE_FAILED",
-            message=f"Google DriveへのPDF保存に失敗しました: {error}",
+            code=code,
+            message="Google DriveへのPDF保存に失敗しました。",
             stage=Stage.SAVING,
         )
 
     emit(Stage.VERIFYING, "Google Drive上のPDF実在を再確認しています。")
     try:
         stored = receipt_finder(storage.list_files(), service, target_month)
-    except Exception as error:
+    except Exception:
         return failed(
             code="DRIVE_VERIFY_FAILED",
-            message=f"保存後のGoogle Drive再確認に失敗しました: {error}",
+            message="保存後のGoogle Drive再確認に失敗しました。",
             stage=Stage.VERIFYING,
         )
 

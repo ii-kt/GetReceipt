@@ -9,21 +9,42 @@ import subprocess
 import time
 import urllib.request
 from pathlib import Path
+from threading import RLock
 from typing import Any, Callable
 
 from ..config import DATA_DIR
+from ..runtime_security import ensure_private_directory
 
 
 class BrowserAutomationError(RuntimeError):
     pass
 
 
-DEFAULT_USER_AGENT = (
-    "Mozilla/5.0 (X11; Linux x86_64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/149.0.0.0 Safari/537.36"
-)
 ACCEPT_LANGUAGE = "ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7"
+_GOOGLE_CHROME_EXECUTABLES = {
+    "chrome.exe",
+    "google-chrome",
+    "google-chrome-stable",
+}
+_BROWSER_ENV_ALLOWLIST = (
+    "APPDATA",
+    "COMSPEC",
+    "DISPLAY",
+    "HOME",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "LANG",
+    "LC_ALL",
+    "LOCALAPPDATA",
+    "PATH",
+    "SYSTEMROOT",
+    "TEMP",
+    "TMP",
+    "TZ",
+    "USERPROFILE",
+    "WINDIR",
+    "XDG_RUNTIME_DIR",
+)
 
 
 def _path_exists(value: str | None) -> str | None:
@@ -33,25 +54,57 @@ def _path_exists(value: str | None) -> str | None:
     return str(path) if path.exists() else None
 
 
+def _is_google_chrome_path(value: str | None) -> bool:
+    name = str(value or "").replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    return name.lower() in _GOOGLE_CHROME_EXECUTABLES
+
+
+def _browser_process_environment() -> dict[str, str]:
+    """Build a minimal child environment without worker credentials."""
+
+    child = {
+        key: str(os.environ[key])
+        for key in _BROWSER_ENV_ALLOWLIST
+        if os.environ.get(key)
+    }
+    child.setdefault("LANG", "ja_JP.UTF-8")
+    child.setdefault("TZ", "Asia/Tokyo")
+    return child
+
+
 def find_browser_executable() -> str | None:
     for candidate in (
         os.getenv("BROWSER_EXECUTABLE"),
         os.getenv("CHROME_BIN"),
-        os.getenv("CHROMIUM_BIN"),
-        os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH"),
     ):
         found = _path_exists(candidate)
-        if found:
+        if found and _is_google_chrome_path(found):
             return found
 
-    for name in ("chromium", "chromium-browser", "google-chrome", "google-chrome-stable"):
+    for name in ("google-chrome", "google-chrome-stable", "chrome"):
         found = shutil.which(name)
-        if found:
+        if found and _is_google_chrome_path(found):
             return found
 
-    for candidate in ("/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome"):
+    windows_roots = tuple(
+        Path(value)
+        for value in (
+            os.getenv("PROGRAMFILES"),
+            os.getenv("PROGRAMFILES(X86)"),
+            os.getenv("LOCALAPPDATA"),
+        )
+        if value
+    )
+    for candidate in (
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+        *(
+            str(root / "Google" / "Chrome" / "Application" / "chrome.exe")
+            for root in windows_roots
+        ),
+    ):
         found = _path_exists(candidate)
-        if found:
+        if found and _is_google_chrome_path(found):
             return found
     return None
 
@@ -78,8 +131,25 @@ class CDPConnection:
 
         self.websocket = connect(websocket_url, open_timeout=20, ping_interval=None)
         self.next_id = 1
+        self._send_lock = RLock()
 
     def send(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
+        session_id: str | None = None,
+        timeout: float = 30,
+    ) -> dict[str, Any]:
+        with self._send_lock:
+            return self._send_locked(
+                method,
+                params,
+                session_id=session_id,
+                timeout=timeout,
+            )
+
+    def _send_locked(
         self,
         method: str,
         params: dict[str, Any] | None = None,
@@ -127,7 +197,6 @@ class ManagedBrowser:
         self.connection: CDPConnection | None = None
         self.target_id: str | None = None
         self.session_id: str | None = None
-        self.stderr_path = self.download_dir / "chromium-stderr.log"
         self.uses_headless = True
 
     def ensure_started(self) -> None:
@@ -137,12 +206,13 @@ class ManagedBrowser:
             self.target_id = None
             self.session_id = None
 
-        self.profile_dir.mkdir(parents=True, exist_ok=True)
-        self.download_dir.mkdir(parents=True, exist_ok=True)
+        ensure_private_directory(self.profile_dir)
+        ensure_private_directory(self.download_dir)
         executable = find_browser_executable()
         if not executable:
             raise BrowserAutomationError(
-                "取得用Chromiumを見つけられませんでした。packages.txtのchromium設定を確認してください。"
+                "取得用Google Chromeを見つけられませんでした。"
+                "常設ワーカーのBROWSER_EXECUTABLEを確認してください。"
             )
 
         if self.port is None:
@@ -154,6 +224,16 @@ class ManagedBrowser:
         if self.connection is None:
             version = self._wait_for_version()
             self.connection = CDPConnection(version["webSocketDebuggerUrl"])
+            product = str(
+                self.connection.send("Browser.getVersion").get("product") or ""
+            )
+            if not product.startswith("Chrome/"):
+                self.connection.close()
+                self.connection = None
+                self._stop_process()
+                raise BrowserAutomationError(
+                    "取得用ブラウザが公式Google Chromeとして確認できませんでした。"
+                )
             try:
                 self.connection.send(
                     "Browser.setDownloadBehavior",
@@ -194,8 +274,6 @@ class ManagedBrowser:
     def _launch_browser(self, executable: str, headless_arg: str | None, prefix_args: list[str] | None = None) -> None:
         assert self.port is not None
         self.uses_headless = headless_arg is not None
-        self.stderr_path.parent.mkdir(parents=True, exist_ok=True)
-        self.stderr_path.write_text("", encoding="utf-8")
         args = [
             executable,
             f"--remote-debugging-port={self.port}",
@@ -204,7 +282,6 @@ class ManagedBrowser:
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-background-networking",
-            "--disable-blink-features=AutomationControlled",
             "--disable-breakpad",
             "--disable-crash-reporter",
             "--disable-dev-shm-usage",
@@ -212,28 +289,27 @@ class ManagedBrowser:
             "--disable-features=Crashpad",
             "--disable-gpu",
             "--disable-popup-blocking",
-            "--disable-setuid-sandbox",
             "--disable-sync",
             "--metrics-recording-only",
-            "--no-sandbox",
-            "--no-zygote",
             "--lang=ja-JP,ja",
             f"--accept-lang={ACCEPT_LANGUAGE}",
             "--window-size=1280,900",
             "about:blank",
         ]
         if headless_arg:
-            args.insert(-1, f"--user-agent={DEFAULT_USER_AGENT}")
             args.insert(-1, headless_arg)
         command = [*(prefix_args or []), *args]
-        stderr_handle = self.stderr_path.open("ab")
-        try:
-            self.process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=stderr_handle)
-        finally:
-            stderr_handle.close()
+        # Provider pages and Chrome itself may emit account identifiers into
+        # diagnostics. Do not persist raw browser stderr beside job downloads.
+        self.process = subprocess.Popen(
+            command,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=_browser_process_environment(),
+        )
 
     def _cleanup_profile_locks(self) -> None:
-        self.profile_dir.mkdir(parents=True, exist_ok=True)
+        ensure_private_directory(self.profile_dir)
         for name in ("SingletonLock", "SingletonSocket", "SingletonCookie", "LOCK"):
             try:
                 (self.profile_dir / name).unlink(missing_ok=True)
@@ -253,14 +329,7 @@ class ManagedBrowser:
         self.process = None
 
     def _stderr_tail(self) -> str:
-        try:
-            text = self.stderr_path.read_text(encoding="utf-8", errors="replace")
-        except Exception:
-            return ""
-        text = text.strip()
-        if not text:
-            return ""
-        return text[-1200:]
+        return ""
 
     def _wait_for_version(self) -> dict[str, Any]:
         assert self.port is not None
@@ -270,7 +339,7 @@ class ManagedBrowser:
         while time.time() < deadline:
             if self.process is not None and self.process.poll() is not None:
                 detail = self._stderr_tail()
-                suffix = f" / Chromium stderr: {detail}" if detail else ""
+                suffix = f" / Google Chrome stderr: {detail}" if detail else ""
                 raise BrowserAutomationError(f"取得用ブラウザが起動直後に終了しました(exit {self.process.returncode}){suffix}")
             try:
                 with urllib.request.urlopen(url, timeout=2) as response:
@@ -279,7 +348,7 @@ class ManagedBrowser:
                 last_error = error
                 time.sleep(0.25)
         detail = self._stderr_tail()
-        suffix = f" / Chromium stderr: {detail}" if detail else ""
+        suffix = f" / Google Chrome stderr: {detail}" if detail else ""
         raise BrowserAutomationError(f"取得用ブラウザに接続できませんでした: {last_error}{suffix}")
 
     def ensure_page(self) -> str:
@@ -300,7 +369,6 @@ class ManagedBrowser:
         for method in ("Runtime.enable", "Page.enable", "Network.enable"):
             self.connection.send(method, session_id=self.session_id)
         self._apply_environment_overrides()
-        self._install_stealth_script()
         return self.session_id
 
     def attach_to_target(self, target_id: str) -> str:
@@ -314,7 +382,6 @@ class ManagedBrowser:
         for method in ("Runtime.enable", "Page.enable", "Network.enable"):
             self.connection.send(method, session_id=self.session_id)
         self._apply_environment_overrides()
-        self._install_stealth_script()
         return self.session_id
 
     def get_targets(self) -> list[dict[str, Any]]:
@@ -346,6 +413,43 @@ class ManagedBrowser:
     def evaluate(self, expression: str, *, timeout: float = 30) -> Any:
         session_id = self.ensure_page()
         assert self.connection is not None
+        return self._evaluate_in_session(expression, session_id=session_id, timeout=timeout)
+
+    def current_page_target(self) -> dict[str, Any]:
+        """Return the attached live page without starting or reattaching a browser.
+
+        Security-challenge continuation must operate on the exact page that
+        produced the challenge. Falling back to ``ensure_page`` here would be
+        unsafe because it can start a new browser after the original process or
+        target has disappeared.
+        """
+
+        if self.process is None or self.process.poll() is not None:
+            raise BrowserAutomationError("取得用ブラウザは既に終了しています。")
+        if self.connection is None or not self.target_id or not self.session_id:
+            raise BrowserAutomationError("取得用ブラウザの現在ページへ接続できません。")
+        targets = self.connection.send("Target.getTargets").get("targetInfos", [])
+        target = next(
+            (
+                item
+                for item in targets
+                if item.get("targetId") == self.target_id and item.get("type") == "page"
+            ),
+            None,
+        )
+        if target is None:
+            raise BrowserAutomationError("取得用ブラウザの追加認証ページは既に閉じられています。")
+        return target
+
+    def evaluate_current_page(self, expression: str, *, timeout: float = 30) -> Any:
+        """Evaluate only in the currently attached live target."""
+
+        self.current_page_target()
+        assert self.session_id is not None
+        return self._evaluate_in_session(expression, session_id=self.session_id, timeout=timeout)
+
+    def _evaluate_in_session(self, expression: str, *, session_id: str, timeout: float) -> Any:
+        assert self.connection is not None
         result = self.connection.send(
             "Runtime.evaluate",
             {
@@ -367,36 +471,6 @@ class ManagedBrowser:
     def _apply_environment_overrides(self) -> None:
         assert self.connection is not None
         assert self.session_id is not None
-        if self.uses_headless:
-            try:
-                self.connection.send(
-                    "Network.setUserAgentOverride",
-                    {
-                        "userAgent": DEFAULT_USER_AGENT,
-                        "acceptLanguage": ACCEPT_LANGUAGE,
-                        "platform": "Linux",
-                        "userAgentMetadata": {
-                            "brands": [
-                                {"brand": "Google Chrome", "version": "149"},
-                                {"brand": "Chromium", "version": "149"},
-                                {"brand": "Not A(Brand", "version": "24"},
-                            ],
-                            "fullVersionList": [
-                                {"brand": "Google Chrome", "version": "149.0.0.0"},
-                                {"brand": "Chromium", "version": "149.0.0.0"},
-                                {"brand": "Not A(Brand", "version": "24.0.0.0"},
-                            ],
-                            "platform": "Linux",
-                            "platformVersion": "",
-                            "architecture": "x86",
-                            "model": "",
-                            "mobile": False,
-                        },
-                    },
-                    session_id=self.session_id,
-                )
-            except BrowserAutomationError:
-                pass
         for method, params in (
             ("Emulation.setLocaleOverride", {"locale": "ja-JP"}),
             ("Emulation.setTimezoneOverride", {"timezoneId": "Asia/Tokyo"}),
@@ -406,42 +480,15 @@ class ManagedBrowser:
             except BrowserAutomationError:
                 pass
 
-    def _install_stealth_script(self) -> None:
-        assert self.connection is not None
-        assert self.session_id is not None
-        platform = "Linux x86_64"
-        source = """
-(() => {
-  try {
-    Object.defineProperty(navigator, "webdriver", { get: () => undefined });
-    Object.defineProperty(navigator, "languages", { get: () => ["ja-JP", "ja", "en-US", "en"] });
-    Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] });
-    Object.defineProperty(navigator, "platform", { get: () => "__PLATFORM__" });
-    Object.defineProperty(navigator, "vendor", { get: () => "Google Inc." });
-    window.chrome = window.chrome || { runtime: {} };
-  } catch (_) {}
-})();
-""".replace("__PLATFORM__", platform)
-        try:
-            self.connection.send(
-                "Page.addScriptToEvaluateOnNewDocument",
-                {"source": source},
-                session_id=self.session_id,
-            )
-        except BrowserAutomationError:
-            pass
-
-    def move_at(self, x: int, y: int) -> None:
-        session_id = self.ensure_page()
-        assert self.connection is not None
-        self.connection.send(
-            "Input.dispatchMouseEvent",
-            {"type": "mouseMoved", "x": x, "y": y, "button": "none"},
-            session_id=session_id,
-        )
-
     def click_at(self, x: int, y: int) -> None:
         session_id = self.ensure_page()
+        self._click_in_session(session_id, x, y)
+
+    def click_current_page(self, x: int, y: int) -> None:
+        session_id = self._current_session_id()
+        self._click_in_session(session_id, x, y)
+
+    def _click_in_session(self, session_id: str, x: int, y: int) -> None:
         assert self.connection is not None
         for event_type, button in (("mouseMoved", "none"), ("mousePressed", "left"), ("mouseReleased", "left")):
             self.connection.send(
@@ -450,39 +497,15 @@ class ManagedBrowser:
                 session_id=session_id,
             )
 
-    def drag_at(self, start_x: int, start_y: int, end_x: int, end_y: int, *, steps: int = 18) -> None:
-        session_id = self.ensure_page()
-        assert self.connection is not None
-        self.connection.send(
-            "Input.dispatchMouseEvent",
-            {"type": "mouseMoved", "x": start_x, "y": start_y, "button": "none"},
-            session_id=session_id,
-        )
-        self.connection.send(
-            "Input.dispatchMouseEvent",
-            {"type": "mousePressed", "x": start_x, "y": start_y, "button": "left", "clickCount": 1},
-            session_id=session_id,
-        )
-        steps = max(4, int(steps))
-        for index in range(1, steps + 1):
-            progress = index / steps
-            wiggle = 2 if index % 2 else -2
-            x = round(start_x + (end_x - start_x) * progress)
-            y = round(start_y + (end_y - start_y) * progress + wiggle)
-            self.connection.send(
-                "Input.dispatchMouseEvent",
-                {"type": "mouseMoved", "x": x, "y": y, "button": "left", "buttons": 1},
-                session_id=session_id,
-            )
-            time.sleep(0.025)
-        self.connection.send(
-            "Input.dispatchMouseEvent",
-            {"type": "mouseReleased", "x": end_x, "y": end_y, "button": "left", "clickCount": 1},
-            session_id=session_id,
-        )
-
     def insert_text(self, text: str) -> None:
         session_id = self.ensure_page()
+        self._insert_text_in_session(session_id, text)
+
+    def insert_text_current_page(self, text: str) -> None:
+        session_id = self._current_session_id()
+        self._insert_text_in_session(session_id, text)
+
+    def _insert_text_in_session(self, session_id: str, text: str) -> None:
         assert self.connection is not None
         self.connection.send("Input.insertText", {"text": text}, session_id=session_id)
 
@@ -509,15 +532,47 @@ class ManagedBrowser:
 
     def press_key(self, key: str = "Enter") -> None:
         session_id = self.ensure_page()
+        self._press_key_in_session(session_id, key)
+
+    def press_key_current_page(self, key: str = "Enter") -> None:
+        session_id = self._current_session_id()
+        self._press_key_in_session(session_id, key)
+
+    def _press_key_in_session(self, session_id: str, key: str) -> None:
         assert self.connection is not None
-        key_map = {"Enter": ("Enter", 13), "Escape": ("Escape", 27), "Tab": ("Tab", 9)}
+        key_map = {
+            "Enter": ("Enter", 13),
+            "Escape": ("Escape", 27),
+            "Tab": ("Tab", 9),
+            "Backspace": ("Backspace", 8),
+        }
         code, virtual_key = key_map.get(key, (key, 0))
         params = {"key": key, "code": code, "windowsVirtualKeyCode": virtual_key, "nativeVirtualKeyCode": virtual_key}
-        self.connection.send("Input.dispatchKeyEvent", {"type": "rawKeyDown", **params}, session_id=session_id)
+        key_down: dict[str, Any] = {"type": "rawKeyDown", **params}
+        if key == "Enter":
+            # A keyDown carrying the generated carriage return triggers the
+            # browser's native form-submit behavior. rawKeyDown alone produces
+            # key events but does not submit focused forms in headless Chrome.
+            key_down.update(
+                {
+                    "type": "keyDown",
+                    "text": "\r",
+                    "unmodifiedText": "\r",
+                    "keyIdentifier": "U+000D",
+                }
+            )
+        self.connection.send("Input.dispatchKeyEvent", key_down, session_id=session_id)
         self.connection.send("Input.dispatchKeyEvent", {"type": "keyUp", **params}, session_id=session_id)
 
     def screenshot(self) -> bytes:
         session_id = self.ensure_page()
+        return self._screenshot_in_session(session_id)
+
+    def screenshot_current_page(self) -> bytes:
+        session_id = self._current_session_id()
+        return self._screenshot_in_session(session_id)
+
+    def _screenshot_in_session(self, session_id: str) -> bytes:
         assert self.connection is not None
         result = self.connection.send(
             "Page.captureScreenshot",
@@ -526,6 +581,11 @@ class ManagedBrowser:
             timeout=20,
         )
         return base64.b64decode(result.get("data", ""))
+
+    def _current_session_id(self) -> str:
+        self.current_page_target()
+        assert self.session_id is not None
+        return self.session_id
 
     def print_to_pdf(self, file_path: Path, **options: Any) -> Path:
         session_id = self.ensure_page()
@@ -549,23 +609,37 @@ class ManagedBrowser:
         return file_path
 
     def page_summary(self) -> dict[str, Any]:
-        return self.evaluate(
-            """(() => {
+        return self.evaluate(self._page_summary_expression()) or {}
+
+    def current_page_summary(self) -> dict[str, Any]:
+        """Summarize the attached page without allowing browser restart."""
+
+        return self.evaluate_current_page(self._page_summary_expression()) or {}
+
+    @staticmethod
+    def _page_summary_expression() -> str:
+        return """(() => {
               const text = document.body ? document.body.innerText.replace(/\\s+/g, " ").slice(0, 10000) : "";
               const visible = (el) => {
                 const rect = el.getBoundingClientRect();
                 const style = getComputedStyle(el);
                 return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
               };
-              const visibleInputs = [...document.querySelectorAll("input, select, button, a, textarea, [role='searchbox']")]
-                .filter(visible)
-                .slice(0, 100)
-                .map((el) => ({
-                  tag: el.tagName.toLowerCase(),
-                  type: el.getAttribute("type") || "",
-                  text: (el.innerText || el.value || el.placeholder || el.getAttribute("aria-label") || el.title || "").trim().slice(0, 100),
-                  href: el.href || ""
-                }));
+               const visibleInputs = [...document.querySelectorAll("input, select, button, a, textarea, [role='searchbox']")]
+                 .filter(visible)
+                 .slice(0, 100)
+                 .map((el) => {
+                   const tag = el.tagName.toLowerCase();
+                   // Never move input values (passwords, login IDs or one-time
+                   // codes) from the page into Python diagnostics.
+                   const text = (el.innerText || el.placeholder || el.getAttribute("aria-label") || el.title || "").trim().slice(0, 100);
+                   return {
+                     tag,
+                     type: el.getAttribute("type") || "",
+                     text,
+                     href: el.href || ""
+                   };
+                 });
               return {
                 url: location.href,
                 title: document.title,
@@ -574,7 +648,6 @@ class ManagedBrowser:
                 visibleInputs
               };
             })()"""
-        ) or {}
 
     def cookies_for(self, url: str) -> list[dict[str, Any]]:
         session_id = self.ensure_page()
@@ -582,7 +655,7 @@ class ManagedBrowser:
         return self.connection.send("Network.getCookies", {"urls": [url]}, session_id=session_id).get("cookies", [])
 
     def clear_downloads(self) -> None:
-        self.download_dir.mkdir(parents=True, exist_ok=True)
+        ensure_private_directory(self.download_dir)
         for child in self.download_dir.iterdir():
             if child.is_dir():
                 shutil.rmtree(child)
@@ -620,11 +693,14 @@ class ManagedBrowser:
 
     def close(self, *, clear_profile: bool = False) -> None:
         process = self.process
-        if self.connection:
+        connection = self.connection
+        if connection:
             try:
-                self.connection.send("Browser.close", timeout=5)
+                connection.send("Browser.close", timeout=5)
             except Exception:
-                self.connection.close()
+                pass
+            finally:
+                connection.close()
         self.connection = None
         if process and process.poll() is None:
             try:
