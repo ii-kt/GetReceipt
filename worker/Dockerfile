@@ -22,7 +22,8 @@ RUN apt-get update \
         > /etc/apt/sources.list.d/google-chrome.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends google-chrome-stable \
-    && apt-get purge -y --auto-remove gnupg wget \
+    # google-chrome-stable depends on wget; purging wget would remove Chrome.
+    && apt-get purge -y --auto-remove gnupg \
     && rm -f /etc/apt/sources.list.d/google-chrome.list \
         /usr/share/keyrings/google-chrome.gpg \
     && rm -rf /var/lib/apt/lists/*
