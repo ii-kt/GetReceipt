@@ -105,7 +105,11 @@ jobs:
             getreceipt-worker:smoke \
             python /app/scripts/verify_chrome_worker.py)"; then
             echo "::group::Chrome launch diagnostics"
-            probe='timeout 25 google-chrome --headless=new --disable-gpu --no-first-run --user-data-dir=/tmp/probe --dump-dom about:blank >/dev/null 2>/tmp/err; code=$?; echo "exit=$code"; tail -6 /tmp/err'
+            probe='unshare -U true; echo "unshare-userns=$?"; timeout 25 google-chrome --headless=new --disable-gpu --no-first-run --user-data-dir=/tmp/probe --dump-dom about:blank >/dev/null 2>/tmp/err; code=$?; echo "exit=$code"; tail -8 /tmp/err'
+            echo "--- custom seccomp-chrome profile"
+            docker run --rm --cap-drop ALL --shm-size=1g \
+              --security-opt "seccomp=$PWD/deploy/seccomp-chrome.json" \
+              getreceipt-worker:smoke sh -c "$probe" || true
             echo "--- default confinement"
             docker run --rm --cap-drop ALL --shm-size=1g \
               getreceipt-worker:smoke sh -c "$probe" || true
