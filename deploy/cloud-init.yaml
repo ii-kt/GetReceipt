@@ -1,0 +1,53 @@
+#cloud-config
+# GetReceipt worker VM bootstrap (Ubuntu 24.04 LTS, x86_64, Tokyo region).
+#
+# Paste this file into the provider's cloud-init / user-data box when creating
+# the VM. After first boot the VM has Docker Engine + Compose, the repository
+# under /opt/getreceipt, and the encrypted-disk data directory prepared for
+# container UID 10001. Secrets are NOT part of this file; write deploy/.env and
+# deploy/worker.env over SSH once, then run the compose commands from
+# deploy/README.md section 5.
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - ca-certificates
+  - curl
+  - git
+  - unattended-upgrades
+
+write_files:
+  - path: /etc/apt/apt.conf.d/51getreceipt-unattended
+    permissions: "0644"
+    content: |
+      Unattended-Upgrade::Automatic-Reboot "false";
+  - path: /opt/getreceipt-firstboot.sh
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      set -eu
+      # Docker Engine + Compose plugin from the official repository.
+      install -m 0755 -d /etc/apt/keyrings
+      curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+        -o /etc/apt/keyrings/docker.asc
+      chmod a+r /etc/apt/keyrings/docker.asc
+      . /etc/os-release
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable" \
+        > /etc/apt/sources.list.d/docker.list
+      apt-get update
+      apt-get install -y docker-ce docker-ce-cli containerd.io \
+        docker-buildx-plugin docker-compose-plugin
+      systemctl enable --now docker
+
+      # Repository checkout used only for deploy/ configuration files.
+      if [ ! -d /opt/getreceipt/.git ]; then
+        git clone https://github.com/ii-kt/GetReceipt.git /opt/getreceipt
+      fi
+      chmod 700 /opt/getreceipt/deploy
+
+      # Encrypted persistent data directory owned by the container user.
+      install -d -m 0700 -o 10001 -g 10001 /srv/getreceipt/data
+
+runcmd:
+  - [/opt/getreceipt-firstboot.sh]
