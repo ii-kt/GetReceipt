@@ -98,9 +98,16 @@ jobs:
         id: chrome_smoke
         shell: bash
         run: |
-          chrome_smoke_json="$(docker run --rm --cap-drop ALL --shm-size=1g \
+          if ! chrome_smoke_json="$(docker run --rm --cap-drop ALL --shm-size=1g \
             getreceipt-worker:smoke \
-            python /app/scripts/verify_chrome_worker.py)"
+            python /app/scripts/verify_chrome_worker.py)"; then
+            echo "::group::Chrome discovery diagnostics"
+            docker run --rm getreceipt-worker:smoke sh -c \
+              'env | grep -E "BROWSER|CHROME|PATH"; ls -la /usr/bin/google-chrome* /opt/google/chrome 2>&1 | head -20; readlink -f /usr/bin/google-chrome 2>&1; id' \
+              || true
+            echo "::endgroup::"
+            exit 1
+          fi
           printf '%s\n' "$chrome_smoke_json"
           printf 'json=%s\n' "$chrome_smoke_json" >> "$GITHUB_OUTPUT"
 

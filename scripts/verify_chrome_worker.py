@@ -43,7 +43,22 @@ class SmokePage(BaseHTTPRequestHandler):
 def verify() -> dict[str, object]:
     executable = find_browser_executable()
     if not executable:
-        raise RuntimeError("Google Chrome was not found")
+        import os
+
+        probes = {
+            candidate: Path(candidate).exists()
+            for candidate in (
+                "/usr/bin/google-chrome",
+                "/usr/bin/google-chrome-stable",
+                "/opt/google/chrome/google-chrome",
+                "/opt/google/chrome/chrome",
+            )
+        }
+        raise RuntimeError(
+            "Google Chrome was not found: "
+            f"BROWSER_EXECUTABLE={os.getenv('BROWSER_EXECUTABLE')!r}, "
+            f"CHROME_BIN={os.getenv('CHROME_BIN')!r}, probes={probes}"
+        )
     executable_name = Path(executable).name.lower()
     if executable_name not in {"chrome.exe", "google-chrome", "google-chrome-stable"}:
         raise RuntimeError(f"selected browser is not Google Chrome: {executable_name}")
