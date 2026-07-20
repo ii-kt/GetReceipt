@@ -806,11 +806,13 @@ def render_monthly_view(
             state="failed",
         )
         ui_styles.render_fatal_notice(
-            title="iPhone単体の自動取得を開始できません",
+            title="自動取得はワーカー配備後に使えます",
             detail=(
-                "この環境にはGoogle Chromeがありません。"
-                "HTTPSの常設ワーカーをStreamlit Secretsの"
-                "[receipt_worker]に設定してください。"
+                "お使いの端末のChromeは関係ありません。自動取得は、"
+                "クラウド上の常設ワーカー(VM)内のGoogle Chromeで動作します。"
+                "ワーカーを配備し、Streamlit Secretsの[receipt_worker]を"
+                "設定すると有効になります。それまでも下の手動PDF追加と"
+                "Drive確認は利用できます。"
             ),
             code="CHROME_WORKER_NOT_CONFIGURED",
         )
