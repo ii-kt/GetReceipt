@@ -1,6 +1,10 @@
 streamlit==1.58.0
 streamlit-image-coordinates==0.4.0
 Authlib>=1.3.2
+# Authlib's Starlette integration (used by st.login) imports httpx at runtime,
+# but neither streamlit[auth] nor Authlib declares it. Without it the
+# /auth/login route fails with a misleading StreamlitMissingAuthlibError.
+httpx>=0.24,<1
 cryptography>=42,<50
 google-api-python-client>=2.130
 google-auth>=2.29
