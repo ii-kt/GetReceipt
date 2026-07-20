@@ -1,0 +1,78 @@
+#cloud-config
+# GetReceipt worker bootstrap for Oracle Cloud Always Free (x86 AMD micro,
+# 1GB RAM), Ubuntu 24.04, Tokyo region. Paste this whole file into the
+# "Show advanced options -> Management -> Cloud-init script" box when creating
+# the instance (or Base64-encode it if the console asks).
+#
+# Differences from the generic deploy/cloud-init.yaml:
+#   - Adds a 4 GiB swapfile so a single headless Google Chrome fits in 1GB RAM.
+#   - Opens TCP 80/443 in the instance iptables (Oracle Ubuntu images ship a
+#     restrictive INPUT chain). You STILL must open 80/443 in the VCN Security
+#     List in the console — that is a separate cloud-level firewall.
+#
+# Secrets are NOT in this file. After first boot, SSH in once and write
+# deploy/.env and deploy/worker.env, then run the compose commands.
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - ca-certificates
+  - curl
+  - git
+  - unattended-upgrades
+  - netfilter-persistent
+  - iptables-persistent
+
+write_files:
+  - path: /etc/apt/apt.conf.d/51getreceipt-unattended
+    permissions: "0644"
+    content: |
+      Unattended-Upgrade::Automatic-Reboot "false";
+  - path: /opt/getreceipt-firstboot.sh
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      set -eu
+
+      # --- 1GB RAM needs swap so one headless Chrome does not OOM ---
+      if [ ! -f /swapfile ]; then
+        fallocate -l 4G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=4096
+        chmod 600 /swapfile
+        mkswap /swapfile
+        swapon /swapfile
+        echo '/swapfile none swap sw 0 0' >> /etc/fstab
+        # Prefer RAM; only spill to swap under real pressure.
+        sysctl -w vm.swappiness=10
+        echo 'vm.swappiness=10' > /etc/sysctl.d/99-getreceipt-swap.conf
+      fi
+
+      # --- Open the app ports in the instance firewall (VCN is separate) ---
+      iptables -I INPUT -p tcp --dport 80 -j ACCEPT
+      iptables -I INPUT -p tcp --dport 443 -j ACCEPT
+      netfilter-persistent save
+
+      # --- Docker Engine + Compose plugin from the official repository ---
+      install -m 0755 -d /etc/apt/keyrings
+      curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+        -o /etc/apt/keyrings/docker.asc
+      chmod a+r /etc/apt/keyrings/docker.asc
+      . /etc/os-release
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable" \
+        > /etc/apt/sources.list.d/docker.list
+      apt-get update
+      apt-get install -y docker-ce docker-ce-cli containerd.io \
+        docker-buildx-plugin docker-compose-plugin
+      systemctl enable --now docker
+
+      # --- Repository checkout used only for deploy/ configuration files ---
+      if [ ! -d /opt/getreceipt/.git ]; then
+        git clone https://github.com/ii-kt/GetReceipt.git /opt/getreceipt
+      fi
+      chmod 700 /opt/getreceipt/deploy
+
+      # --- Encrypted-at-app-layer data dir owned by the container user ---
+      install -d -m 0700 -o 10001 -g 10001 /srv/getreceipt/data
+
+runcmd:
+  - [/opt/getreceipt-firstboot.sh]
