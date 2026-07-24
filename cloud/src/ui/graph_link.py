@@ -82,7 +82,10 @@ def render_graph_connection(
             payload = manager.start()
             authorization_url = str(payload.get("authorization_url") or "")
         except Exception as error:
-            st.error(f"Microsoft接続を開始できませんでした（{type(error).__name__}）。")
+            st.error(
+                "Microsoft接続を開始できませんでした。\n\n"
+                f"`{_error_detail(error)}`"
+            )
             return False
         st.link_button(
             "Microsoftメールを接続する",
@@ -91,6 +94,32 @@ def render_graph_connection(
             type="primary",
         )
     return False
+
+
+def _error_detail(error: Exception) -> str:
+    """Extract a readable status from a Drive/HTTP error without leaking data."""
+
+    status = getattr(getattr(error, "resp", None), "status", None)
+    reason = ""
+    content = getattr(error, "content", None)
+    if isinstance(content, (bytes, bytearray)):
+        try:
+            import json
+
+            parsed = json.loads(content.decode("utf-8", "ignore"))
+            reason = str(
+                parsed.get("error", {}).get("message")
+                or parsed.get("error_description")
+                or ""
+            )
+        except Exception:
+            reason = ""
+    if not reason:
+        reason = str(error)
+    prefix = f"{type(error).__name__}"
+    if status:
+        prefix += f" {status}"
+    return f"{prefix}: {reason}"[:400]
 
 
 def _section(secrets: Any, name: str) -> Any | None:
