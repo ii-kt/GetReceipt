@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 import unicodedata
@@ -52,6 +53,11 @@ from src.workflows.receipt_archive import (
 TOKYO = ZoneInfo("Asia/Tokyo")
 BATCH_KEY = "getreceipt_batch"
 FAILURE_KEY = "getreceipt_failure"
+
+# The Streamlit control plane may fall back to Chromium when Google Chrome
+# cannot be installed (Streamlit Community Cloud lite mode). The persistent
+# worker never imports this module and stays Chrome-Stable-only.
+os.environ.setdefault("GETRECEIPT_ALLOW_CHROMIUM", "1")
 NOTICE_KEY = "getreceipt_notice"
 SECURITY_CHALLENGE_KEY = "getreceipt_security_challenge"
 SECURITY_WAITING_PHASE = "awaiting_security_code"
@@ -252,37 +258,62 @@ def cleanup_runtime(browser: ManagedBrowser | None, run_dir: Path) -> str:
     return ",".join(errors)
 
 
-def end_batch_with_failure(
-    *,
-    service_id: str,
-    target_month: str,
-    code: str,
-    message: str,
-) -> None:
-    st.session_state[FAILURE_KEY] = {
-        "service_id": service_id,
-        "target_month": target_month,
-        "code": code,
-        "message": message,
-    }
+def _finish_batch(batch: dict[str, Any]) -> None:
+    failed = dict(batch.get("failed", {}))
+    if failed:
+        labels = "、".join(
+            service_by_id(service_id).label for service_id in failed
+        )
+        st.session_state[NOTICE_KEY] = (
+            f"{labels}は自動取得できませんでした。他のサービスは完了しています。"
+            "失敗した分はもう一度実行するか、手動でPDFを追加できます。"
+        )
+    else:
+        st.session_state[NOTICE_KEY] = "未取得だったPDFをすべてGoogle Driveで確認しました。"
     st.session_state.pop(BATCH_KEY, None)
 
 
-def complete_batch_service(batch: dict[str, Any], service_id: str) -> bool:
+def _advance_batch(batch: dict[str, Any]) -> bool:
+    """Move to the next pending service; report True when the batch ended."""
+
     service_ids = list(batch.get("service_ids", ()))
+    completed = list(batch.get("completed", ()))
+    failed = dict(batch.get("failed", {}))
+    next_services = [
+        item
+        for item in service_ids
+        if item not in completed and item not in failed
+    ]
+    if next_services:
+        batch["current_service"] = next_services[0]
+        batch["phase"] = "running"
+        st.session_state[BATCH_KEY] = batch
+        return False
+    _finish_batch(batch)
+    return True
+
+
+def fail_batch_service(
+    batch: dict[str, Any],
+    service_id: str,
+    *,
+    code: str,
+    message: str,
+) -> bool:
+    """Record one service failure and continue with the remaining services."""
+
+    failed = dict(batch.get("failed", {}))
+    failed[service_id] = {"code": code, "message": message}
+    batch["failed"] = failed
+    return _advance_batch(batch)
+
+
+def complete_batch_service(batch: dict[str, Any], service_id: str) -> bool:
     completed = list(batch.get("completed", ()))
     if service_id not in completed:
         completed.append(service_id)
     batch["completed"] = completed
-    batch["phase"] = "running"
-    next_services = [item for item in service_ids if item not in completed]
-    if next_services:
-        batch["current_service"] = next_services[0]
-        st.session_state[BATCH_KEY] = batch
-        return False
-    st.session_state[NOTICE_KEY] = "未取得だったPDFをすべてGoogle Driveで確認しました。"
-    st.session_state.pop(BATCH_KEY, None)
-    return True
+    return _advance_batch(batch)
 
 
 def security_challenge_state_matches(
@@ -371,11 +402,15 @@ def execute_next_service(storage: DriveStorage, batch: dict[str, Any]) -> None:
     target_month = str(batch["target_month"])
     service_ids = list(batch.get("service_ids", ()))
     completed = list(batch.get("completed", ()))
-    remaining = [service_id for service_id in service_ids if service_id not in completed]
+    already_failed = dict(batch.get("failed", {}))
+    remaining = [
+        service_id
+        for service_id in service_ids
+        if service_id not in completed and service_id not in already_failed
+    ]
 
     if not remaining:
-        st.session_state[NOTICE_KEY] = "未取得だったPDFをすべてGoogle Driveで確認しました。"
-        st.session_state.pop(BATCH_KEY, None)
+        _finish_batch(batch)
         st.rerun()
 
     service_id = remaining[0]
@@ -474,14 +509,17 @@ def execute_next_service(storage: DriveStorage, batch: dict[str, Any]) -> None:
         failure_code = failure.code if failure else "ACQUISITION_FAILED"
         failure_message = failure.message if failure else "自動取得に失敗しました。"
     if failure_code:
-        end_batch_with_failure(
-            service_id=service_id,
-            target_month=target_month,
+        batch_complete = fail_batch_service(
+            batch,
+            service_id,
             code=failure_code,
             message=failure_message,
         )
         status_box.update(
-            label=f"{service.label}の自動取得に失敗したため終了しました。",
+            label=(
+                f"{service.label}の自動取得に失敗しました。"
+                + ("" if batch_complete else "残りのサービスへ進みます。")
+            ),
             state="error",
         )
         st.rerun()
@@ -582,14 +620,17 @@ def resume_security_code(
         failure_message = failure.message if failure else "自動取得に失敗しました。"
 
     if failure_code:
-        end_batch_with_failure(
-            service_id=service_id,
-            target_month=target_month,
+        batch_complete = fail_batch_service(
+            batch,
+            service_id,
             code=failure_code,
             message=failure_message,
         )
         status_box.update(
-            label=f"{service.label}の自動取得に失敗したため終了しました。",
+            label=(
+                f"{service.label}の自動取得に失敗しました。"
+                + ("" if batch_complete else "残りのサービスへ進みます。")
+            ),
             state="error",
         )
         st.rerun()

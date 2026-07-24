@@ -529,34 +529,39 @@ class StreamlitAppTest(unittest.TestCase):
             any(button.label == "最新状態に更新" for button in app.button)
         )
 
-    def test_first_failure_ends_batch_without_running_following_services(self) -> None:
+    def test_first_failure_still_runs_following_services(self) -> None:
         storage = FakeDriveStorage([])
         attempted: list[str] = []
 
-        def fail(**kwargs):
-            attempted.append(kwargs["service_id"])
-            return SimpleNamespace(
-                success=False,
-                file_name="",
-                failure=SimpleNamespace(code="LOGIN_FAILED", message="ログインに失敗しました。"),
-            )
+        def acquire(**kwargs):
+            service_id = kwargs["service_id"]
+            attempted.append(service_id)
+            if service_id == "epos":
+                return SimpleNamespace(
+                    success=False,
+                    file_name="",
+                    failure=SimpleNamespace(
+                        code="LOGIN_FAILED",
+                        message="ログインに失敗しました。",
+                    ),
+                )
+            return SimpleNamespace(success=True, file_name="ok.pdf", failure=None)
 
         app = self.app()
         with (
             patch.object(DriveStorage, "from_secrets", return_value=storage),
             patch("src.automation.browser_session.ManagedBrowser"),
             patch("src.automation.providers.build_receipt_fetcher", return_value=object()),
-            patch("src.workflows.auto_acquisition.run_auto_acquisition", side_effect=fail),
+            patch("src.workflows.auto_acquisition.run_auto_acquisition", side_effect=acquire),
         ):
             app.run(timeout=20)
             acquisition_button = next(button for button in app.button if "自動取得" in button.label)
-            acquisition_button.click().run(timeout=20)
+            acquisition_button.click().run(timeout=60)
 
-        self.assertEqual(attempted, ["epos"])
+        # A failed epos must not stop the remaining services from being tried.
+        self.assertIn("epos", attempted)
+        self.assertGreater(len(attempted), 1)
         self.assertEqual([], list(app.exception))
-        markdown = "\n".join(item.value for item in app.markdown)
-        self.assertIn("自動取得に失敗したため終了しました", markdown)
-        self.assertTrue(any("再度自動取得" in button.label for button in app.button))
 
 
 if __name__ == "__main__":

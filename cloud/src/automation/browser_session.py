@@ -26,6 +26,19 @@ _GOOGLE_CHROME_EXECUTABLES = {
     "google-chrome",
     "google-chrome-stable",
 }
+# Chromium is acceptable only where the owner explicitly relaxed the browser
+# policy (the Streamlit Community Cloud lite mode, which cannot install
+# Google Chrome). The persistent worker never sets this flag and stays
+# Chrome-Stable-only.
+_CHROMIUM_EXECUTABLES = {
+    "chromium",
+    "chromium-browser",
+    "chromium.exe",
+}
+
+
+def _chromium_fallback_allowed() -> bool:
+    return str(os.getenv("GETRECEIPT_ALLOW_CHROMIUM") or "").strip() == "1"
 _BROWSER_ENV_ALLOWLIST = (
     "APPDATA",
     "COMSPEC",
@@ -56,7 +69,9 @@ def _path_exists(value: str | None) -> str | None:
 
 def _is_google_chrome_path(value: str | None) -> bool:
     name = str(value or "").replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
-    return name.lower() in _GOOGLE_CHROME_EXECUTABLES
+    if name.lower() in _GOOGLE_CHROME_EXECUTABLES:
+        return True
+    return _chromium_fallback_allowed() and name.lower() in _CHROMIUM_EXECUTABLES
 
 
 def _browser_process_environment() -> dict[str, str]:
@@ -81,7 +96,10 @@ def find_browser_executable() -> str | None:
         if found and _is_google_chrome_path(found):
             return found
 
-    for name in ("google-chrome", "google-chrome-stable", "chrome"):
+    lookup_names = ["google-chrome", "google-chrome-stable", "chrome"]
+    if _chromium_fallback_allowed():
+        lookup_names.extend(["chromium", "chromium-browser"])
+    for name in lookup_names:
         found = shutil.which(name)
         if found and _is_google_chrome_path(found):
             return found
@@ -98,6 +116,11 @@ def find_browser_executable() -> str | None:
     for candidate in (
         "/usr/bin/google-chrome",
         "/usr/bin/google-chrome-stable",
+        *(
+            ("/usr/bin/chromium", "/usr/bin/chromium-browser")
+            if _chromium_fallback_allowed()
+            else ()
+        ),
         *(
             str(root / "Google" / "Chrome" / "Application" / "chrome.exe")
             for root in windows_roots
@@ -227,7 +250,10 @@ class ManagedBrowser:
             product = str(
                 self.connection.send("Browser.getVersion").get("product") or ""
             )
-            if not product.startswith("Chrome/"):
+            accepted_products = ["Chrome/"]
+            if _chromium_fallback_allowed():
+                accepted_products.extend(["Chromium/", "HeadlessChrome/"])
+            if not any(product.startswith(prefix) for prefix in accepted_products):
                 self.connection.close()
                 self.connection = None
                 self._stop_process()

@@ -32,6 +32,7 @@ class BrowserSelectionTest(unittest.TestCase):
                 os.environ,
                 {
                     "BROWSER_EXECUTABLE": "",
+                    "GETRECEIPT_ALLOW_CHROMIUM": "",
                     "CHROME_BIN": "",
                     "PROGRAMFILES": "",
                     "PROGRAMFILES(X86)": "",
@@ -58,6 +59,7 @@ class BrowserSelectionTest(unittest.TestCase):
                 os.environ,
                 {
                     "BROWSER_EXECUTABLE": "C:\\Chrome\\chrome.exe",
+                    "GETRECEIPT_ALLOW_CHROMIUM": "",
                     "CHROME_BIN": "",
                 },
                 clear=False,
@@ -79,6 +81,7 @@ class BrowserSelectionTest(unittest.TestCase):
                 os.environ,
                 {
                     "BROWSER_EXECUTABLE": "C:\\Browser\\msedge.exe",
+                    "GETRECEIPT_ALLOW_CHROMIUM": "",
                     "CHROME_BIN": "C:\\Browser\\chromium.exe",
                     "PROGRAMFILES": "",
                     "PROGRAMFILES(X86)": "",
@@ -152,3 +155,63 @@ class BrowserSelectionTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ChromiumFallbackFlagTest(unittest.TestCase):
+    def test_chromium_is_selected_only_with_explicit_flag(self) -> None:
+        def which(name: str) -> str | None:
+            return "/usr/bin/chromium" if name == "chromium" else None
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "BROWSER_EXECUTABLE": "",
+                    "CHROME_BIN": "",
+                    "GETRECEIPT_ALLOW_CHROMIUM": "1",
+                    "PROGRAMFILES": "",
+                    "PROGRAMFILES(X86)": "",
+                    "LOCALAPPDATA": "",
+                },
+                clear=False,
+            ),
+            patch("src.automation.browser_session.shutil.which", side_effect=which),
+            patch(
+                "src.automation.browser_session._path_exists",
+                side_effect=lambda value: (
+                    value if value == "/usr/bin/chromium" else None
+                ),
+            ),
+        ):
+            selected = find_browser_executable()
+
+        self.assertEqual("/usr/bin/chromium", selected)
+
+    def test_chromium_stays_rejected_without_flag(self) -> None:
+        def which(name: str) -> str | None:
+            return "/usr/bin/chromium" if name == "chromium" else None
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "BROWSER_EXECUTABLE": "",
+                    "CHROME_BIN": "",
+                    "GETRECEIPT_ALLOW_CHROMIUM": "",
+                    "PROGRAMFILES": "",
+                    "PROGRAMFILES(X86)": "",
+                    "LOCALAPPDATA": "",
+                },
+                clear=False,
+            ),
+            patch("src.automation.browser_session.shutil.which", side_effect=which),
+            patch(
+                "src.automation.browser_session._path_exists",
+                side_effect=lambda value: (
+                    value if value == "/usr/bin/chromium" else None
+                ),
+            ),
+        ):
+            selected = find_browser_executable()
+
+        self.assertIsNone(selected)
