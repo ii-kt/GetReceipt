@@ -36,6 +36,7 @@ from src.jobs.client import (
 from src.storage.drive_storage import DriveStorage
 from src.ui import remote_jobs
 from src.ui.access_control import require_owner_access
+from src.ui.graph_link import graph_manager_from_secrets, render_graph_connection
 from src.ui.manual_upload import render_manual_upload
 from src.ui import styles as ui_styles
 from src.ui.module_contract import ensure_ui_module
@@ -436,6 +437,77 @@ def restore_security_code_waiting(
     return True
 
 
+def _run_tokuten_via_graph(
+    *,
+    storage: DriveStorage,
+    batch: dict[str, Any],
+    service: Any,
+    target_month: str,
+    graph_manager: Any,
+    status_box: Any,
+) -> None:
+    """Fetch the electricity receipt through Microsoft Graph (no browser)."""
+
+    from src.automation.microsoft_graph import TokutenGraphFetcher
+
+    result = None
+    unexpected_error = ""
+    try:
+        fetcher = TokutenGraphFetcher(graph_manager.access_token)
+        result = run_auto_acquisition(
+            service_id="tokuten",
+            target_month=target_month,
+            fetcher=fetcher,
+            storage=storage,
+            on_progress=lambda event: status_box.write(event.message),
+        )
+    except Exception as error:
+        unexpected_error = f"{type(error).__name__}: {error}"[:300]
+        LOGGER.warning("Tokuten Graph acquisition failed (%s)", unexpected_error)
+
+    if unexpected_error:
+        failure_code = "MICROSOFT_GRAPH_FAILED"
+        failure_message = "Microsoftメールからの取得に失敗しました。"
+        failure_detail = unexpected_error
+    elif result is None or not result.success:
+        failure = getattr(result, "failure", None)
+        failure_code = getattr(failure, "code", "") or "MICROSOFT_GRAPH_FAILED"
+        failure_message = getattr(failure, "message", "") or "Microsoftメールからの取得に失敗しました。"
+        failure_detail = str(getattr(failure, "detail", "") or "")
+    else:
+        failure_code = ""
+        failure_message = ""
+        failure_detail = ""
+
+    if failure_code:
+        batch_complete = fail_batch_service(
+            batch,
+            "tokuten",
+            code=failure_code,
+            message=failure_message,
+            detail=failure_detail,
+        )
+        status_box.update(
+            label=(
+                f"{service.label}の自動取得に失敗しました。"
+                + ("" if batch_complete else "残りのサービスへ進みます。")
+            ),
+            state="error",
+        )
+        st.rerun()
+
+    batch_complete = complete_batch_service(batch, "tokuten")
+    status_box.update(
+        label=(
+            "自動取得が完了しました。"
+            if batch_complete
+            else f"{service.label}をDriveで確認しました。次へ進みます。"
+        ),
+        state="complete",
+    )
+    st.rerun()
+
+
 def execute_next_service(storage: DriveStorage, batch: dict[str, Any]) -> None:
     target_month = str(batch["target_month"])
     service_ids = list(batch.get("service_ids", ()))
@@ -461,6 +533,24 @@ def execute_next_service(storage: DriveStorage, batch: dict[str, Any]) -> None:
         f"{position}/{len(service_ids)}  {service.label}を自動取得しています。",
         expanded=True,
     )
+
+    if service_id == "tokuten":
+        graph_manager = graph_manager_from_secrets(st.secrets, storage)
+        if graph_manager is not None:
+            try:
+                connected = bool(graph_manager.status().get("connected"))
+            except Exception:
+                connected = False
+            if connected:
+                _run_tokuten_via_graph(
+                    storage=storage,
+                    batch=batch,
+                    service=service,
+                    target_month=target_month,
+                    graph_manager=graph_manager,
+                    status_box=status_box,
+                )
+                return
 
     run_dir = challenge_runtime.new_attempt_run_dir(service_id, target_month)
     browser: ManagedBrowser | None = None
@@ -989,23 +1079,42 @@ def render_monthly_view(
             code=visible_failure.get("code", "ACQUISITION_FAILED"),
         )
 
+    # Electricity (Tokuten) is fetched through Microsoft Graph, not a browser,
+    # so it needs a one-time Microsoft mail connection instead of a login page.
+    graph_manager = graph_manager_from_secrets(st.secrets, storage)
+    tokuten_missing = any(service.id == "tokuten" for service in missing_services)
+    graph_connected = False
+    if graph_manager is not None and tokuten_missing and not active_batch:
+        graph_connected = render_graph_connection(
+            st, graph_manager, required=True
+        )
+
+    def _acquirable(service_id: str) -> bool:
+        if service_id == "tokuten" and graph_manager is not None:
+            return graph_connected
+        return True
+
+    queueable = [
+        service.id for service in missing_services if _acquirable(service.id)
+    ]
+
     if active_batch and active_challenge:
         render_security_code_form(storage, active_batch, active_challenge)
-    elif not active_batch and missing_services and missing_credentials:
+    elif not active_batch and missing_services and missing_credentials and not queueable:
         ui_styles.render_fatal_notice(
             title="自動取得を開始できません",
             detail=f"ログイン情報が未設定です: {'、'.join(missing_credentials)}",
             code="CREDENTIALS_MISSING",
         )
-    elif not active_batch and missing_services:
+    elif not active_batch and queueable:
         retrying = visible_failure is not None
         if st.button(
-            f"未取得{len(missing_services)}件を{'再度' if retrying else ''}自動取得",
+            f"未取得{len(queueable)}件を{'再度' if retrying else ''}自動取得",
             type="primary",
             use_container_width=True,
             icon=":material/download:",
         ):
-            queue_batch(selected_month, [service.id for service in missing_services])
+            queue_batch(selected_month, queueable)
 
     render_service_rows(receipts, selected_month, active_batch)
     render_manual_upload(
@@ -1033,7 +1142,7 @@ def _remote_acquisition_active(client: WorkerClient, target_month: str) -> bool:
         return True
 
 
-def handle_microsoft_oauth_callback() -> None:
+def handle_microsoft_oauth_callback(storage: DriveStorage | None = None) -> None:
     notice = str(st.session_state.pop("microsoft_oauth_notice", "") or "")
     oauth_error = str(st.session_state.pop("microsoft_oauth_error", "") or "")
     if notice:
@@ -1046,12 +1155,17 @@ def handle_microsoft_oauth_callback() -> None:
     provider_error = _query_value("error")
     if not state or (not code and not provider_error):
         return
+
     try:
         connection = worker_connection_from_secrets(st.secrets)
     except WorkerConfigError:
         connection = None
+
+    graph_manager = None
     if connection is None:
-        return
+        graph_manager = graph_manager_from_secrets(st.secrets, storage)
+        if graph_manager is None:
+            return
 
     if provider_error:
         st.session_state["microsoft_oauth_error"] = (
@@ -1062,12 +1176,16 @@ def handle_microsoft_oauth_callback() -> None:
         return
 
     try:
-        WorkerClient(connection).complete_microsoft_oauth(
-            code=code,
-            state=state,
-        )
+        if connection is not None:
+            WorkerClient(connection).complete_microsoft_oauth(code=code, state=state)
+        else:
+            graph_manager.complete(code=code, state=state)
     except (WorkerApiError, ValueError) as error:
         st.session_state["microsoft_oauth_error"] = str(error)
+    except Exception as error:
+        st.session_state["microsoft_oauth_error"] = (
+            f"Microsoftメール接続を完了できませんでした（{type(error).__name__}）。"
+        )
     else:
         st.session_state["microsoft_oauth_notice"] = (
             "Microsoftメールを読み取り専用で接続しました。"
@@ -1201,8 +1319,8 @@ def render_archive_view(drive_files: list[dict[str, str]], drive_error: str) -> 
 
 ui_styles.inject_design()
 require_owner_access(st, st.secrets)
-handle_microsoft_oauth_callback()
 storage, drive_files, drive_error = load_drive_snapshot()
+handle_microsoft_oauth_callback(storage)
 ui_styles.render_compact_header(
     sync_label=current_sync_label() if not drive_error else "Drive未確認",
     drive_url=RECEIPT_DRIVE_FOLDER_URL,
