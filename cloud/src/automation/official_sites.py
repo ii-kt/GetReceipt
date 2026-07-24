@@ -44,7 +44,7 @@ class ServiceAutomationConfig:
 
 SERVICE_AUTOMATION_CONFIGS: dict[str, ServiceAutomationConfig] = {
     "commufa": ServiceAutomationConfig(
-        target_url="https://mypage.commufa.jp/join/s/",
+        target_url="https://mypage.commufa.jp/join/s/login/",
         partner_name="中部テレコミュニケーション株式会社",
         login_hints=("Myコミュファログイン", "ログインID", "メールアドレス", "パスワード", "ログイン"),
         logged_in_hints=("ログアウト", "ご契約内容", "ご請求額", "契約内容・ご請求額", "過去の請求額"),
@@ -79,6 +79,15 @@ def build_tokuten_search_query(target_month: str, config: ServiceAutomationConfi
 
 def _normalize(value: str) -> str:
     return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", str(value or ""))).strip().lower()
+
+
+def _is_commufa_host(url: Any) -> bool:
+    """True only when the page has settled on the official Commufa host."""
+
+    from urllib.parse import urlsplit
+
+    parsed = urlsplit(str(url or ""))
+    return parsed.scheme == "https" and parsed.hostname == "mypage.commufa.jp"
 
 
 def _script(payload: dict[str, Any], body: str) -> str:
@@ -330,9 +339,26 @@ class CommufaAutoFetcher:
             last_state = state
             if state == "logged-in":
                 return
+            # A Salesforce Experience site redirects an unauthenticated visitor
+            # to its login page. Do not run the credential script until the page
+            # has actually settled on the official host, otherwise a transient
+            # redirect origin is mistaken for a hijacked login page.
+            if not _is_commufa_host(summary.get("url")):
+                last_reason = f"公式ホストへの遷移を待機中（現在: {summary.get('url') or '空'}）。"
+                time.sleep(1.0)
+                continue
             result = self.browser.evaluate(build_configured_auto_login_expression(self.credentials), timeout=15) or {}
             last_reason = str(result.get("reason") or result.get("code") or "")
-            if self._apply_login_result(result):
+            try:
+                progressed = self._apply_login_result(result)
+            except AcquisitionError as error:
+                # Tolerate a brief origin mismatch while the login page is still
+                # settling; only surface it if the host never stabilizes.
+                if error.code == "SECURITY_ORIGIN_MISMATCH" and time.time() < deadline - 5:
+                    time.sleep(1.0)
+                    continue
+                raise
+            if progressed:
                 continue
             time.sleep(1.0)
         raise AcquisitionError(
@@ -943,7 +969,7 @@ const byText = (words, excludes = []) => controls()
   .sort((a, b) => a.text.length - b.text.length)[0]?.el || null;
 const pageText = normalize(document.body?.innerText || "");
 if (location.protocol !== "https:" || location.hostname !== "mypage.commufa.jp") {
-  return { attempted: false, code: "SECURITY_ORIGIN_MISMATCH", challengeKind: "other", reason: "公式ログインページではありません。" };
+  return { attempted: false, code: "SECURITY_ORIGIN_MISMATCH", challengeKind: "other", reason: "公式ログインページではありません（着地: " + location.protocol + "//" + location.hostname + location.pathname + "）。" };
 }
 const captchaPresent = Boolean(document.querySelector("iframe[src*='recaptcha'], iframe[src*='hcaptcha'], [data-sitekey], .g-recaptcha, .h-captcha")) || ["captcha", "recaptcha", "hcaptcha", "画像認証", "ロボットではありません"].some((word) => pageText.includes(normalize(word)));
 if (captchaPresent) return { attempted: false, code: "SECURITY_CHALLENGE", challengeKind: "captcha", reason: "CAPTCHAが表示されています。" };
