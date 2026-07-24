@@ -53,6 +53,7 @@ from src.workflows.receipt_archive import (
 TOKYO = ZoneInfo("Asia/Tokyo")
 BATCH_KEY = "getreceipt_batch"
 FAILURE_KEY = "getreceipt_failure"
+FAILURES_KEY = "getreceipt_service_failures"
 
 # The Streamlit control plane may fall back to Chromium when Google Chrome
 # cannot be installed (Streamlit Community Cloud lite mode). The persistent
@@ -175,6 +176,12 @@ def render_service_rows(
         remote_failures = {}
     challenge = security_challenge_for(target_month)
     challenge_service = str(challenge.get("service_id") or "") if challenge else ""
+    persisted_failures = st.session_state.get(FAILURES_KEY, {})
+    month_failures = (
+        persisted_failures.get(target_month, {})
+        if isinstance(persisted_failures, dict)
+        else {}
+    )
 
     for service in SERVICES:
         receipt = receipts[service.id]
@@ -183,6 +190,10 @@ def render_service_rows(
         remote_failure = remote_failures.get(service.id)
         if not isinstance(remote_failure, dict):
             remote_failure = None
+        if remote_failure is None and receipt is None:
+            stored = month_failures.get(service.id)
+            if isinstance(stored, dict):
+                remote_failure = stored
         local_failure = (
             failure_for(service.id, target_month)
             if receipt is None
@@ -196,7 +207,14 @@ def render_service_rows(
             detail = "保存完了。Google Driveの表示を更新中"
         elif remote_failure:
             status = "failed"
-            detail = remote_failure.get("message", "自動取得に失敗しました。")
+            reason = str(remote_failure.get("detail") or "")
+            code = str(remote_failure.get("code") or "")
+            base = remote_failure.get("message", "自動取得に失敗しました。")
+            detail = base
+            if code:
+                detail = f"{base}（{code}）"
+            if reason:
+                detail = f"{detail} {reason}"
         elif service.id == challenge_service:
             status = "running"
             detail = "本人確認コードの入力を待っています"
@@ -231,10 +249,18 @@ def queue_batch(target_month: str, service_ids: list[str]) -> None:
         "target_month": target_month,
         "service_ids": service_ids,
         "completed": [],
+        "failed": {},
         "current_service": service_ids[0],
     }
     st.session_state.pop(FAILURE_KEY, None)
     st.session_state.pop(NOTICE_KEY, None)
+    # Clear the previous run's failures for the services being retried.
+    persisted = dict(st.session_state.get(FAILURES_KEY, {}))
+    month_failures = dict(persisted.get(target_month, {}))
+    for service_id in service_ids:
+        month_failures.pop(service_id, None)
+    persisted[target_month] = month_failures
+    st.session_state[FAILURES_KEY] = persisted
     st.rerun()
 
 
@@ -299,12 +325,24 @@ def fail_batch_service(
     *,
     code: str,
     message: str,
+    detail: str = "",
 ) -> bool:
     """Record one service failure and continue with the remaining services."""
 
     failed = dict(batch.get("failed", {}))
-    failed[service_id] = {"code": code, "message": message}
+    failed[service_id] = {"code": code, "message": message, "detail": detail}
     batch["failed"] = failed
+    # Persist beyond the batch so the reason stays visible after completion.
+    target_month = str(batch.get("target_month") or "")
+    persisted = dict(st.session_state.get(FAILURES_KEY, {}))
+    month_failures = dict(persisted.get(target_month, {}))
+    month_failures[service_id] = {
+        "code": code,
+        "message": message,
+        "detail": detail,
+    }
+    persisted[target_month] = month_failures
+    st.session_state[FAILURES_KEY] = persisted
     return _advance_batch(batch)
 
 
@@ -498,9 +536,11 @@ def execute_next_service(storage: DriveStorage, batch: dict[str, Any]) -> None:
 
     failure_code = ""
     failure_message = ""
+    failure_detail = ""
     if unexpected_error:
         failure_code = "UNEXPECTED_ERROR"
         failure_message = unexpected_error
+        failure_detail = unexpected_error
     elif result is None:
         failure_code = "ACQUISITION_FAILED"
         failure_message = "自動取得結果を確認できませんでした。"
@@ -508,12 +548,14 @@ def execute_next_service(storage: DriveStorage, batch: dict[str, Any]) -> None:
         failure = result.failure
         failure_code = failure.code if failure else "ACQUISITION_FAILED"
         failure_message = failure.message if failure else "自動取得に失敗しました。"
+        failure_detail = str(getattr(failure, "detail", "") or "")
     if failure_code:
         batch_complete = fail_batch_service(
             batch,
             service_id,
             code=failure_code,
             message=failure_message,
+            detail=failure_detail,
         )
         status_box.update(
             label=(

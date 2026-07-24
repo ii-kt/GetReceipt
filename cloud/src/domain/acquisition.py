@@ -43,6 +43,7 @@ class AcquisitionFailure:
     code: str
     message: str
     stage: Stage
+    detail: str = ""
 
 
 @dataclass(frozen=True)

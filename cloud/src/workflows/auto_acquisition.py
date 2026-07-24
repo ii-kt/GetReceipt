@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from threading import Lock
 from typing import Any, Protocol
@@ -37,6 +38,8 @@ ReceiptFinder = Callable[[list[dict[str, str]], Any, str], Any | None]
 StatementFetcher = Callable[[str], Any]
 CancellationCheck = Callable[[], bool]
 _ACQUISITION_LOCK = Lock()
+LOGGER = logging.getLogger(__name__)
+
 _ACTION_REQUIRED_CHALLENGE_KINDS = {
     "verification_code",
     "captcha",
@@ -104,14 +107,18 @@ def _run_auto_acquisition_unlocked(
                 # UI notification failures must not change acquisition semantics.
                 pass
 
-    def failed(*, code: str, message: str, stage: Stage) -> AcquisitionResult:
+    def failed(
+        *, code: str, message: str, stage: Stage, detail: str = ""
+    ) -> AcquisitionResult:
         emit(Stage.FAILED, message)
         return AcquisitionResult(
             service_id=service_id,
             target_month=target_month,
             outcome=AcquisitionOutcome.FAILED,
             events=tuple(events),
-            failure=AcquisitionFailure(code=code, message=message, stage=stage),
+            failure=AcquisitionFailure(
+                code=code, message=message, stage=stage, detail=detail
+            ),
         )
 
     def cancelled(stage: Stage) -> AcquisitionResult | None:
@@ -192,10 +199,15 @@ def _run_auto_acquisition_unlocked(
                 events=tuple(events),
                 challenge=SecurityChallenge(kind=challenge_kind, message=message),
             )
+        detail = f"{type(error).__name__}: {error}"[:300]
+        LOGGER.warning(
+            "Acquisition fetch failed for %s (%s)", service_id, detail
+        )
         return failed(
             code=_error_code(error, "FETCH_FAILED"),
             message="PDFの自動取得に失敗しました。",
             stage=Stage.FETCHING,
+            detail=detail,
         )
 
     content = getattr(statement, "content", b"")
