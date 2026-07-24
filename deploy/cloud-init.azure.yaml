@@ -1,0 +1,70 @@
+#cloud-config
+# GetReceipt worker bootstrap for Azure (Standard_B1s, 1GB RAM), Ubuntu 24.04,
+# Japan East. Paste this whole file into the VM creation wizard under
+# "詳細 (Advanced) -> カスタム データ (Custom data)".
+#
+# B1s has 1 GB of RAM, so a 4 GiB swapfile is added to give one headless
+# Google Chrome enough room. Inbound 80/443 are controlled by the Azure Network
+# Security Group (selected in the wizard), so no local firewall rules here.
+#
+# Secrets are NOT in this file. After first boot, SSH in once and write
+# deploy/.env and deploy/worker.env, then run the compose commands.
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - ca-certificates
+  - curl
+  - git
+  - unattended-upgrades
+
+write_files:
+  - path: /etc/apt/apt.conf.d/51getreceipt-unattended
+    permissions: "0644"
+    content: |
+      Unattended-Upgrade::Automatic-Reboot "false";
+  - path: /opt/getreceipt-firstboot.sh
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      set -eu
+
+      # --- 1 GB of RAM needs swap so one headless Chrome does not OOM ---
+      if [ ! -f /swapfile ]; then
+        fallocate -l 4G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=4096
+        chmod 600 /swapfile
+        mkswap /swapfile
+        swapon /swapfile
+        echo '/swapfile none swap sw 0 0' >> /etc/fstab
+        # Prefer RAM; only spill to swap under real pressure.
+        sysctl -w vm.swappiness=10
+        echo 'vm.swappiness=10' > /etc/sysctl.d/99-getreceipt-swap.conf
+      fi
+
+      # --- Docker Engine + Compose plugin from the official repository ---
+      install -m 0755 -d /etc/apt/keyrings
+      curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+        -o /etc/apt/keyrings/docker.asc
+      chmod a+r /etc/apt/keyrings/docker.asc
+      . /etc/os-release
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable" \
+        > /etc/apt/sources.list.d/docker.list
+      apt-get update
+      apt-get install -y docker-ce docker-ce-cli containerd.io \
+        docker-buildx-plugin docker-compose-plugin
+      systemctl enable --now docker
+
+      # --- Repository checkout used only for deploy/ configuration files ---
+      if [ ! -d /opt/getreceipt/.git ]; then
+        git clone https://github.com/ii-kt/GetReceipt.git /opt/getreceipt
+      fi
+      chmod 700 /opt/getreceipt/deploy
+
+      # --- Persistent data directory owned by the container user ---
+      install -d -m 0700 -o 10001 -g 10001 /srv/getreceipt/data
+
+      touch /opt/getreceipt-firstboot.done
+
+runcmd:
+  - [/opt/getreceipt-firstboot.sh]
