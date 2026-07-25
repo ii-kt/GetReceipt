@@ -159,3 +159,56 @@ class CommufaInPageNavigationTest(unittest.TestCase):
         coordinate_marker = source.index('self.browser.click_at')
         # The in-page branch must be reached before the coordinate fallback.
         self.assertLess(clicked_marker, coordinate_marker)
+
+
+class SecurityCodeGateTest(unittest.TestCase):
+    """After the code, an interstitial must not look like a failure."""
+
+    def _gate(self, summary):
+        from src.automation.official_sites import _passed_security_code_gate
+
+        return _passed_security_code_gate(summary)
+
+    def test_interstitial_without_logged_in_markers_passes(self) -> None:
+        self.assertTrue(
+            self._gate(
+                {
+                    "url": "https://mypage.commufa.jp/join/s/",
+                    "passwordFields": 0,
+                    "text": "処理中です しばらくお待ちください",
+                }
+            )
+        )
+
+    def test_login_form_still_showing_does_not_pass(self) -> None:
+        self.assertFalse(
+            self._gate(
+                {
+                    "url": "https://mypage.commufa.jp/join/s/login/",
+                    "passwordFields": 1,
+                    "text": "ログイン",
+                }
+            )
+        )
+
+    def test_rejected_login_does_not_pass(self) -> None:
+        self.assertFalse(
+            self._gate(
+                {
+                    "url": "https://mypage.commufa.jp/join/s/",
+                    "passwordFields": 0,
+                    "text": "ログインに失敗しました。ユーザー名とパスワードが正しいかご確認ください。",
+                }
+            )
+        )
+
+    def test_offsite_page_does_not_pass(self) -> None:
+        self.assertFalse(
+            self._gate(
+                {
+                    "url": "https://example.com/",
+                    "passwordFields": 0,
+                    "text": "ようこそ",
+                }
+            )
+        )

@@ -114,6 +114,31 @@ def _login_timeout_advice(
     return " / ".join(parts)
 
 
+def _passed_security_code_gate(summary: dict[str, Any]) -> bool:
+    """True once the verification step and the password form are both gone.
+
+    The caller has already established that no security challenge is showing,
+    so the remaining question is whether the login form is still up.
+    """
+
+    from urllib.parse import urlsplit
+
+    if int(summary.get("passwordFields") or 0) > 0:
+        return False
+    parsed = urlsplit(str(summary.get("url") or ""))
+    if parsed.hostname != "mypage.commufa.jp":
+        return False
+    if "/login" in (parsed.path or "").lower():
+        return False
+    text = _normalize(str(summary.get("text") or ""))
+    if not text:
+        return False
+    return not any(
+        _normalize(marker) in text
+        for marker in ("ログインに失敗しました", "ログインid（メールアドレス）")
+    )
+
+
 def _is_commufa_host(url: Any) -> bool:
     """True only when the page has settled on the official Commufa host."""
 
@@ -424,11 +449,18 @@ class CommufaAutoFetcher:
             advice=_login_timeout_advice(summary, state=last_state, reason=last_reason),
         )
 
-    def _wait_for_login_after_security_code(self, timeout_seconds: float = 60) -> None:
+    def _wait_for_login_after_security_code(self, timeout_seconds: float = 120) -> None:
         deadline = time.time() + timeout_seconds
+        summary: dict[str, Any] = {}
         while time.time() < deadline:
             summary = self.browser.current_page_summary()
             if classify_configured_login_state(summary, self.config) == "logged-in":
+                return
+            # The portal may land on an interstitial that carries none of the
+            # logged-in markers. Once the code page and the password form are
+            # both gone, the billing navigation can drive from wherever we are
+            # and reports precisely if the page is unexpected.
+            if _passed_security_code_gate(summary):
                 return
             observation = inspect_commufa_security_challenge(self.browser)
             if observation is not None:
@@ -452,7 +484,11 @@ class CommufaAutoFetcher:
         raise AcquisitionError(
             "コミュファで確認コード送信後のログイン完了を確認できませんでした。",
             code="SECURITY_CODE_TIMEOUT",
-            advice="確認コードの有効期限またはコミュファの認証画面を確認してください。",
+            advice=_login_timeout_advice(
+                summary,
+                state="after-security-code",
+                reason="確認コード送信後にログイン済みと判定できませんでした。",
+            ),
             challenge_kind=ChallengeKind.VERIFICATION_CODE,
         )
 
