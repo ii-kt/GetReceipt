@@ -11,7 +11,7 @@ CLOUD = ROOT / "cloud"
 if str(CLOUD) not in sys.path:
     sys.path.insert(0, str(CLOUD))
 
-from src.automation.epos import EposAutoFetcher  # noqa: E402
+from src.automation.epos import AcquisitionError, EposAutoFetcher  # noqa: E402
 from src.automation.official_sites import (  # noqa: E402
     CommufaAutoFetcher,
     WebBillingAutoFetcher,
@@ -112,3 +112,35 @@ class InPageSubmissionTest(unittest.TestCase):
             self.assertTrue(fetcher._apply_login_result(result))
 
         self.assertEqual([], browser.clicks)
+
+
+class CredentialCommitPauseTest(unittest.TestCase):
+    """Filling and submitting must not happen in the same page tick."""
+
+    def test_fill_pass_reports_progress_without_clicking(self) -> None:
+        browser = _Browser()
+        fetcher = CommufaAutoFetcher(browser)  # type: ignore[arg-type]
+        result = {
+            "attempted": True,
+            "code": "CREDENTIALS_FILLED",
+            "filled": True,
+        }
+
+        with patch("src.automation.official_sites.time.sleep"):
+            self.assertTrue(fetcher._apply_login_result(result))
+
+        self.assertEqual([], browser.clicks)
+        self.assertEqual([], browser.keys)
+        # The fill pass must not consume the one-submission allowance.
+        self.assertFalse(fetcher._credential_submission_attempted)
+
+    def test_provider_rejection_stops_instead_of_retrying(self) -> None:
+        browser = _Browser()
+        fetcher = CommufaAutoFetcher(browser)  # type: ignore[arg-type]
+
+        with self.assertRaises(AcquisitionError) as raised:
+            fetcher._apply_login_result(
+                {"attempted": False, "code": "LOGIN_REJECTED"}
+            )
+
+        self.assertEqual("LOGIN_REJECTED", raised.exception.code)

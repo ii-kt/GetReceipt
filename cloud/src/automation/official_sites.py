@@ -251,6 +251,19 @@ def _apply_auto_login_result(browser: ManagedBrowser, result: dict[str, Any], se
             advice="ワンタイムコード、CAPTCHA、本人確認などサイト側の追加認証が出ているため、通常ログインの自動入力では続行できません。",
             challenge_kind=challenge_kind,
         )
+    if code == "LOGIN_REJECTED":
+        raise AcquisitionError(
+            f"{service_label}がログインを拒否しました。",
+            code=code,
+            advice=(
+                "登録されているログインID・パスワードが最新か確認してください。"
+                "続けて試行するとアカウントがロックされる可能性があるため停止しました。"
+            ),
+        )
+    if result.get("attempted") and result.get("filled"):
+        # Let the page commit the field values before the next pass submits.
+        time.sleep(0.8)
+        return True
     if result.get("attempted") and result.get("clickedInPage"):
         # The page already activated the control. A second click here would
         # submit the credentials twice.
@@ -1048,13 +1061,28 @@ const accountInput = textInputs
   })
   .filter((item) => item.score > 0)
   .sort((a, b) => b.score - a.score)[0]?.input || textInputs[0] || null;
+if (/ログインに失敗しました|ユーザー名とパスワードが正しいか/.test(pageText)) {
+  return { attempted: false, code: "LOGIN_REJECTED", reason: "サイトがログインを拒否しました。" };
+}
+let filledNow = false;
 if (accountInput && !String(accountInput.value || "").trim()) {
   if (!payload.loginId) return { attempted: false, code: "LOGIN_ID_NOT_CONFIGURED", reason: "ログインIDまたはメールアドレスが未設定です。" };
   setValue(accountInput, payload.loginId);
+  filledNow = true;
 }
 if (passwordInput) {
-  if (!payload.password && !String(passwordInput.value || "").trim()) return { attempted: false, code: "PASSWORD_NOT_CONFIGURED", reason: "パスワードが未設定です。" };
-  if (payload.password) setValue(passwordInput, payload.password);
+  const passwordFilled = String(passwordInput.value || "").trim().length > 0;
+  if (!payload.password && !passwordFilled) return { attempted: false, code: "PASSWORD_NOT_CONFIGURED", reason: "パスワードが未設定です。" };
+  if (payload.password && !passwordFilled) {
+    setValue(passwordInput, payload.password);
+    filledNow = true;
+  }
+  if (filledNow) {
+    // Submitting in the same tick as the fill loses the values: this login
+    // view commits field state on its own render cycle. Let that happen
+    // first and submit on the next pass.
+    return { attempted: true, code: "CREDENTIALS_FILLED", filled: true, reason: "入力値の反映待ちです。" };
+  }
   const button = byText(["ログイン", "login", "サインイン", "sign in", "送信", "submit", "次へ", "next"], ["戻る", "キャンセル", "お忘れ", "新規", "登録"]);
   if (button) {
     // Activate the control in the page. A coordinate click can miss when the
