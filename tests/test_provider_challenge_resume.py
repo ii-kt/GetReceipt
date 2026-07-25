@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import base64
 import sys
 import unittest
@@ -129,3 +130,32 @@ class ProviderChallengeResumeTest(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+
+
+class CommufaInPageNavigationTest(unittest.TestCase):
+    """Commufa's portal re-renders, so navigation must click in the page.
+
+    Measuring an element and clicking its coordinates a moment later silently
+    misses on this single-page app, which is how the login button failed.
+    """
+
+    def test_every_commufa_navigation_click_is_activated_in_page(self) -> None:
+        from src.automation.official_sites import build_commufa_step_expression
+
+        expression = build_commufa_step_expression(2026, 6)
+
+        # No navigation step may hand raw coordinates back for clicking.
+        self.assertNotIn("click: pointOf(", expression)
+        self.assertIn("const activate = (el) =>", expression)
+        self.assertEqual(4, expression.count("clickedInPage: true"))
+
+    def test_python_does_not_reclick_an_in_page_activation(self) -> None:
+        from src.automation import official_sites
+
+        source = inspect.getsource(
+            official_sites.CommufaAutoFetcher._fetch_statement_from_current_page
+        )
+        clicked_marker = source.index('action.get("clickedInPage")')
+        coordinate_marker = source.index('self.browser.click_at')
+        # The in-page branch must be reached before the coordinate fallback.
+        self.assertLess(clicked_marker, coordinate_marker)

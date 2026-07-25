@@ -342,6 +342,11 @@ class CommufaAutoFetcher:
             if action.get("directUrl"):
                 self.browser.navigate(str(action["directUrl"]), wait_seconds=min(float(action.get("waitMs") or 2500) / 1000, 2.5))
                 continue
+            if action.get("clickedInPage"):
+                # The page already activated the control; clicking the reported
+                # point again would trigger the navigation twice.
+                time.sleep(min(float(action.get("waitMs") or 1200) / 1000, 3.5))
+                continue
             if action.get("click"):
                 click = action["click"]
                 self.browser.click_at(int(click["x"]), int(click["y"]))
@@ -887,6 +892,10 @@ const pointOf = (el) => {
   const rect = el.getBoundingClientRect();
   return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
 };
+// This portal is a single-page app that re-renders between measuring an
+// element and clicking its coordinates, which silently misses. Activate the
+// control in the page and report the point for diagnostics only.
+const activate = (el) => { const point = pointOf(el); el.click(); return point; };
 const controls = () => [...document.querySelectorAll("a, button, input[type='button'], input[type='submit'], input[type='image'], [role='button'], [onclick], [tabindex]")].filter(visible);
 const pageText = () => normalize(document.body?.innerText || "");
 const hasAny = (text, words) => words.some((word) => text.includes(normalize(word)));
@@ -925,7 +934,7 @@ const collectMonths = () => {
 const text = pageText();
 if (text.includes(normalize("利用料金のお知らせ")) && hasTargetMonth(text)) {
   const print = bestControl(["印刷用ページ"], ["ログアウト"]);
-  if (print) return { ok: false, code: "CLICK_PRINT_PAGE", click: pointOf(print.el), waitMs: 2400, logs: ["印刷用ページを開きます: " + print.label.trim().slice(0, 120)] };
+  if (print) return { ok: false, code: "CLICK_PRINT_PAGE", click: activate(print.el), clickedInPage: true, waitMs: 2400, logs: ["印刷用ページを開きます: " + print.label.trim().slice(0, 120)] };
   return { ok: true, code: "DETAIL_PAGE_READY", fallbackPrint: true, metadataText: document.body?.innerText || "", logs: ["対象ご利用年月の利用明細ページをPDF保存します。"] };
 }
 const onPastBillList = text.includes(normalize("過去の請求額の一覧")) && (text.includes(normalize("ご利用年月")) || text.includes(normalize("請求金額")) || location.href.includes("CW40004"));
@@ -942,19 +951,19 @@ if (onPastBillList) {
       .map((el) => ({ el, label: labelOf(el), text: normalize(labelOf(el)) }))
       .filter((item) => item.text.includes(normalize("利用明細")) && !item.text.includes(normalize("通話明細")))
       .sort((a, b) => a.label.length - b.label.length)[0];
-    if (usage) return { ok: false, code: "CLICK_USAGE_DETAIL", click: pointOf(usage.el), waitMs: 3000, logs: ["対象ご利用年月の利用明細を開きます: " + row.text.trim().slice(0, 120)] };
+    if (usage) return { ok: false, code: "CLICK_USAGE_DETAIL", click: activate(usage.el), clickedInPage: true, waitMs: 3000, logs: ["対象ご利用年月の利用明細を開きます: " + row.text.trim().slice(0, 120)] };
   }
   const availableMonths = collectMonths();
   return { ok: false, code: "YEAR_MONTH_NOT_AVAILABLE", message: targetYear + "/" + monthPad + " のご利用年月に対応する利用明細を見つけられませんでした。", advice: availableMonths.length ? "確認できた年月候補: " + availableMonths.join(" / ") : "過去の請求額一覧に対象年月の行が表示されているか確認してください。", availableMonths, logs: [] };
 }
 if (text.includes(normalize("ご利用料金・契約内容のご確認")) || text.includes(normalize("ご契約・料金トップ"))) {
   const past = bestControl(["過去の請求額の一覧"], ["ログアウト"]);
-  if (past) return { ok: false, code: "CLICK_PAST_BILL_LIST", click: pointOf(past.el), waitMs: 3000, logs: ["過去の請求額一覧を開きます: " + past.label.trim().slice(0, 120)] };
+  if (past) return { ok: false, code: "CLICK_PAST_BILL_LIST", click: activate(past.el), clickedInPage: true, waitMs: 3000, logs: ["過去の請求額一覧を開きます: " + past.label.trim().slice(0, 120)] };
 }
 const direct = [...document.querySelectorAll("a")].filter(visible).find((el) => String(el.href || "").includes("COM_RedirectPage") && String(el.href || "").includes("ApplicationTop"));
 if (direct) return { ok: false, code: "NAVIGATE_TO_BILLING_TOP", directUrl: direct.href, waitMs: 3000, logs: ["請求確認画面への直接遷移を検出: " + direct.href] };
 const entry = bestControl(["ご契約内容・ご請求額の確認", "ご利用料金の確認", "詳しくはこちら"], ["netflix", "youtube", "hulu", "ログアウト", "詳細はこちら"]);
-if (entry) return { ok: false, code: "CLICK_BILLING_ENTRY", click: pointOf(entry.el), waitMs: 3500, logs: ["請求確認画面を開きます: " + entry.label.trim().slice(0, 120)] };
+if (entry) return { ok: false, code: "CLICK_BILLING_ENTRY", click: activate(entry.el), clickedInPage: true, waitMs: 3500, logs: ["請求確認画面を開きます: " + entry.label.trim().slice(0, 120)] };
 return { ok: false, code: "CONTRACT_BILLING_PAGE_NOT_FOUND", message: "コミュファ画面で請求確認画面への入口を見つけられませんでした。", advice: "Myコミュファにログイン後、請求確認画面へ進める状態か確認してください。", visibleControls: controls().slice(0, 50).map((el) => labelOf(el).trim().slice(0, 120)).filter(Boolean), logs: [] };
 """,
     )
