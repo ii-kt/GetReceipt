@@ -1184,7 +1184,9 @@ def handle_microsoft_oauth_callback(storage: DriveStorage | None = None) -> None
         st.session_state["microsoft_oauth_error"] = str(error)
     except Exception as error:
         st.session_state["microsoft_oauth_error"] = (
-            f"Microsoftメール接続を完了できませんでした（{type(error).__name__}）。"
+            "Microsoftメール接続を完了できませんでした。\n\n"
+            f"`{type(error).__name__} "
+            f"{getattr(error, 'code', '') or ''}: {error}`"[:400]
         )
     else:
         st.session_state["microsoft_oauth_notice"] = (

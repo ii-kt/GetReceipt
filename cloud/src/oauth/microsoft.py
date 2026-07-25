@@ -461,13 +461,20 @@ class MicrosoftOAuthManager:
                 if isinstance(payload, dict)
                 else ""
             )
+            # Keep Microsoft's own diagnosis: without it every failure looks
+            # identical and the actual misconfiguration stays invisible.
+            description = ""
+            if isinstance(payload, dict):
+                description = str(payload.get("error_description") or "").strip()
+            description = description.splitlines()[0][:200] if description else ""
+            suffix = f"（{oauth_error or response.status_code}: {description}）" if description else ""
             if oauth_error in {"invalid_grant", "interaction_required"}:
                 raise MicrosoftOAuthError(
-                    "Microsoft接続の更新が必要です。再接続してください。",
+                    f"Microsoft接続の更新が必要です。再接続してください。{suffix}",
                     code="MICROSOFT_OAUTH_RECONNECT_REQUIRED",
                 )
             raise MicrosoftOAuthError(
-                "Microsoft認証を完了できませんでした。再接続してください。",
+                f"Microsoft認証を完了できませんでした。再接続してください。{suffix}",
                 code="MICROSOFT_OAUTH_REJECTED",
             )
         return payload
