@@ -88,6 +88,32 @@ def _normalize(value: str) -> str:
     return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", str(value or ""))).strip().lower()
 
 
+def _login_timeout_advice(
+    summary: dict[str, Any],
+    *,
+    state: str,
+    reason: str,
+) -> str:
+    """Describe what the login page actually showed when the wait timed out.
+
+    page_summary never carries input values, so this reports UI text only:
+    the provider's own error banner is what distinguishes a rejected
+    password from a page the automation failed to drive.
+    """
+
+    from urllib.parse import urlsplit
+
+    parsed = urlsplit(str(summary.get("url") or ""))
+    location = f"{parsed.hostname or '?'}{parsed.path or ''}"
+    text = re.sub(r"\s+", " ", str(summary.get("text") or "")).strip()
+    parts = [f"状態={state}", f"画面={location}"]
+    if reason:
+        parts.append(f"直前の判定={reason}")
+    if text:
+        parts.append(f"画面表示={text[:180]}")
+    return " / ".join(parts)
+
+
 def _is_commufa_host(url: Any) -> bool:
     """True only when the page has settled on the official Commufa host."""
 
@@ -340,6 +366,7 @@ class CommufaAutoFetcher:
         deadline = time.time() + timeout_seconds
         last_state = "unknown"
         last_reason = ""
+        summary: dict[str, Any] = {}
         while time.time() < deadline:
             summary = self.browser.page_summary()
             state = classify_configured_login_state(summary, self.config)
@@ -371,7 +398,7 @@ class CommufaAutoFetcher:
         raise AcquisitionError(
             "コミュファの自動ログインを完了できませんでした。",
             code="LOGIN_REQUIRED" if last_state == "login-required" else "LOGIN_TIMEOUT",
-            advice=last_reason or "Streamlit Cloud Secretsのログイン情報とコミュファのログイン画面を確認してください。",
+            advice=_login_timeout_advice(summary, state=last_state, reason=last_reason),
         )
 
     def _wait_for_login_after_security_code(self, timeout_seconds: float = 60) -> None:
