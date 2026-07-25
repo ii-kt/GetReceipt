@@ -71,6 +71,69 @@ def build_drive_service(service_account_info: dict[str, Any]):
     return build("drive", "v3", credentials=credentials, cache_discovery=False)
 
 
+def load_user_oauth_config(secrets: Any | None = None) -> dict[str, str] | None:
+    """Read the owner's own Google OAuth credentials, when configured.
+
+    A service account has no Drive storage quota of its own, so it cannot
+    create files in a consumer account's folder. Acting as the owner via
+    OAuth makes new receipts belong to the owner's own 15 GB quota.
+    """
+
+    section: Any = None
+    if secrets is not None:
+        try:
+            if "google_oauth" in secrets:
+                section = secrets["google_oauth"]
+        except (TypeError, KeyError):
+            section = None
+        except Exception as error:
+            if type(error).__name__ != "StreamlitSecretNotFoundError":
+                raise
+    if section is None:
+        raw = os.getenv("GOOGLE_OAUTH_JSON")
+        if not raw:
+            return None
+        try:
+            section = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+
+    def _value(name: str) -> str:
+        try:
+            return str(section.get(name) or "").strip()
+        except (AttributeError, TypeError):
+            return ""
+
+    config = {
+        "client_id": _value("client_id"),
+        "client_secret": _value("client_secret"),
+        "refresh_token": _value("refresh_token"),
+    }
+    if not all(config.values()):
+        return None
+    return config
+
+
+def build_user_drive_service(config: dict[str, str]):
+    """Build a Drive client that acts as the owner (not a service account)."""
+
+    try:
+        from google.oauth2.credentials import Credentials
+        from googleapiclient.discovery import build
+    except ModuleNotFoundError as error:
+        raise DriveConfigError("Google Drive連携ライブラリが不足しています。") from error
+
+    credentials = Credentials(
+        token=None,
+        refresh_token=config["refresh_token"],
+        client_id=config["client_id"],
+        client_secret=config["client_secret"],
+        token_uri="https://oauth2.googleapis.com/token",
+        scopes=[DRIVE_SCOPE],
+    )
+    return build("drive", "v3", credentials=credentials, cache_discovery=False)
+
+
 class DriveStorage:
     """The narrow Drive adapter required by the automatic acquisition app."""
 
@@ -84,6 +147,12 @@ class DriveStorage:
         secrets: Any | None = None,
         folder_id: str = RECEIPT_DRIVE_FOLDER_ID,
     ) -> "DriveStorage":
+        # Prefer the owner's own OAuth credentials: a service account cannot
+        # create files in a consumer Drive ("Service Accounts do not have
+        # storage quota"), which makes every save fail with HTTP 403.
+        oauth_config = load_user_oauth_config(secrets)
+        if oauth_config is not None:
+            return cls(build_user_drive_service(oauth_config), folder_id=folder_id)
         info = load_service_account_info(secrets)
         return cls(build_drive_service(info), folder_id=folder_id)
 
