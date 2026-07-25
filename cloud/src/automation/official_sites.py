@@ -53,7 +53,14 @@ SERVICE_AUTOMATION_CONFIGS: dict[str, ServiceAutomationConfig] = {
         target_url="https://outlook.live.com/mail/0/",
         partner_name="フラットエナジー株式会社",
         mail_search_query_template="トクテン {year}年{month}月",
-        sender_hints=("besender-s.jp", "トクテンでんき 総合サポートセンター"),
+        # The billing mail is DMARC-authenticated as flat-energy-co.jp
+        # (header.from); besender-s.jp is only the delivery vendor's
+        # envelope sender, so matching on it rejected every real invoice.
+        sender_hints=(
+            "flat-energy-co.jp",
+            "besender-s.jp",
+            "トクテンでんき 総合サポートセンター",
+        ),
         subject_hints=("【トクテンでんき】 請求額確定のお知らせ", "請求額確定のお知らせ"),
         attachment_name_hints=("【トクテンでんき】", "請求書"),
     ),

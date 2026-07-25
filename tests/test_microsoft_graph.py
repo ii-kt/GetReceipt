@@ -203,3 +203,80 @@ class MicrosoftGraphTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProductionSenderShapeTest(unittest.TestCase):
+    """Pin the shape of a real Tokuten invoice mail.
+
+    The provider signs as flat-energy-co.jp (DMARC header.from) while the
+    delivery vendor besender-s.jp only appears as the SMTP envelope sender.
+    Matching on the envelope domain rejected every genuine invoice, so this
+    covers the production values observed in the owner's mailbox.
+    """
+
+    def _session(self, pdf: bytes) -> FakeSession:
+        session = FakeSession(
+            pdf,
+            sender_address="no-reply@flat-energy-co.jp",
+            sender_name="トクテンでんき",
+            authentication_result=(
+                "spf=pass (sender IP is 52.199.24.150) "
+                "smtp.mailfrom=besender-s.jp; dkim=pass "
+                "header.d=flat-energy-co.jp;dmarc=pass action=none "
+                "header.from=flat-energy-co.jp;compauth=pass reason=100"
+            ),
+        )
+        return session
+
+    def test_real_provider_domain_and_octet_stream_attachment_are_accepted(
+        self,
+    ) -> None:
+        pdf = (
+            "%PDF-1.7\nフラットエナジー株式会社 トクテンでんき "
+            "2026年8月 ご請求額 10,003円\n%%EOF"
+        ).encode()
+        session = self._session(pdf)
+        # The provider sends the invoice as a generic binary attachment; only
+        # the .pdf suffix identifies it.
+        original_get = session.get
+
+        def get(url, **kwargs):
+            response = original_get(url, **kwargs)
+            if url.endswith("/attachments"):
+                for item in response.json()["value"]:
+                    item["contentType"] = "application/octet-stream"
+                    item["name"] = "【トクテンでんき】2026年8月分請求書_飯野　海斗様.pdf"
+            return response
+
+        session.get = get  # type: ignore[method-assign]
+
+        fetcher = TokutenGraphFetcher(
+            lambda: "delegated-access-token-value",
+            session=session,
+        )
+        statement = fetcher.fetch_pdf("2026-07")
+
+        self.assertEqual(pdf, statement.content)
+        self.assertEqual(
+            "【トクテンでんき】2026年8月分請求書_飯野　海斗様.pdf",
+            statement.original_file_name,
+        )
+
+    def test_unrelated_domain_is_still_rejected(self) -> None:
+        pdf = (
+            "%PDF-1.7\nフラットエナジー株式会社 トクテンでんき "
+            "2026年8月 ご請求額 10,003円\n%%EOF"
+        ).encode()
+        session = FakeSession(
+            pdf,
+            sender_address="billing@not-the-provider.example",
+            authentication_result=(
+                "dmarc=pass action=none header.from=not-the-provider.example"
+            ),
+        )
+        fetcher = TokutenGraphFetcher(
+            lambda: "delegated-access-token-value",
+            session=session,
+        )
+        with self.assertRaises(AcquisitionError):
+            fetcher.fetch_pdf("2026-07")
