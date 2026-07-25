@@ -119,7 +119,17 @@ def load_drive_snapshot() -> tuple[DriveStorage | None, list[dict[str, str]], st
     try:
         storage = DriveStorage.from_secrets(st.secrets)
         return storage, storage.list_files(), ""
-    except Exception:
+    except Exception as error:
+        detail = f"{type(error).__name__}: {error}".lower()
+        # A refresh token issued by an unpublished OAuth consent screen expires
+        # after seven days. Without naming that, the failure looks like an
+        # unrelated Drive outage.
+        if "invalid_grant" in detail or "token has been expired" in detail:
+            return None, [], (
+                "Googleの認証が失効しました。Google Cloudの「OAuth同意画面」を"
+                "本番公開にしたうえで、[google_oauth]のrefresh_tokenを"
+                "取り直してください。（テスト中のアプリは7日で失効します）"
+            )
         return None, [], "Google Driveの領収書フォルダを確認できませんでした。"
 
 
