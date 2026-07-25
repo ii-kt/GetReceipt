@@ -268,7 +268,7 @@ class SecurityChallengeTest(unittest.TestCase):
 
         for expression in (
             challenge_module._COMMUFA_CHALLENGE_PROBE,
-            challenge_module._COMMUFA_CODE_SUBMISSION_TEMPLATE,
+            challenge_module._COMMUFA_CODE_FILL_TEMPLATE,
         ):
             self.assertIn('["text", "tel", "number", "password"]', expression)
             self.assertIn('autocomplete === "one-time-code"', expression)
@@ -511,3 +511,39 @@ class BrowserLeaseRegistryTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CommufaCodeCommitTest(unittest.TestCase):
+    """Filling and submitting the code must be separate page evaluations.
+
+    Submitting in the same tick sends an empty code: the provider then
+    redisplays the form without mailing a new one, which looks to the owner
+    like the code was rejected.
+    """
+
+    class _Browser:
+        def __init__(self) -> None:
+            self.expressions: list[str] = []
+
+        def current_page_target(self):
+            return {"url": "https://mypage.commufa.jp/join/s/login/"}
+
+        def evaluate_current_page(self, expression, timeout=10):
+            self.expressions.append(expression)
+            if "securityCode" in expression:
+                return {"ok": True, "filled": True}
+            return {"ok": True}
+
+    def test_code_is_committed_before_submission(self) -> None:
+        from src.automation import security_challenge as challenge_module
+
+        browser = self._Browser()
+        with patch.object(challenge_module.time, "sleep") as sleep:
+            challenge_module.submit_commufa_security_code(browser, "123456")
+
+        self.assertEqual(2, len(browser.expressions))
+        # The submit pass must never carry the one-time code.
+        self.assertNotIn("123456", browser.expressions[1])
+        sleep.assert_called_once()
+
+

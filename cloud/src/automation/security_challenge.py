@@ -563,12 +563,20 @@ def submit_commufa_security_code(browser: ManagedBrowser, code: str) -> None:
             "確認コードを入力できるコミュファ公式ページを確認できませんでした。",
             challenge_kind=ChallengeKind.OTHER,
         )
-    expression = _COMMUFA_CODE_SUBMISSION_TEMPLATE.replace(
+    expression = _COMMUFA_CODE_FILL_TEMPLATE.replace(
         "__SECURITY_CODE_JSON__",
         _json_string(safe_code),
     )
     try:
         result = browser.evaluate_current_page(expression, timeout=10) or {}
+        if result.get("filled"):
+            # The page commits the entered value on its own render cycle;
+            # submitting in the same tick sends an empty code.
+            time.sleep(0.8)
+            result = browser.evaluate_current_page(
+                _COMMUFA_CODE_SUBMIT_TEMPLATE,
+                timeout=10,
+            ) or {}
     except Exception:
         # CDP/browser diagnostics must never echo the expression containing the
         # one-time code into workflow errors or application logs.
@@ -663,7 +671,7 @@ _COMMUFA_CHALLENGE_PROBE = r"""(() => {
 })()"""
 
 
-_COMMUFA_CODE_SUBMISSION_TEMPLATE = r"""(() => {
+_COMMUFA_CODE_FILL_TEMPLATE = r"""(() => {
   const securityCode = __SECURITY_CODE_JSON__;
   const normalize = (value) => String(value || "").normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
   const visible = (el) => {
@@ -693,9 +701,9 @@ _COMMUFA_CODE_SUBMISSION_TEMPLATE = r"""(() => {
   if (candidates.length !== 1) return { ok: false, error: "FIELD_NOT_FOUND" };
   const input = candidates[0];
 
-  // Enter the code before looking for the submit control: these forms keep
-  // the button disabled until the field holds a valid code, and a disabled
-  // button is not a visible candidate.
+  // Enter the code and stop. This login view commits field state on its own
+  // render cycle, so submitting in the same tick sends an empty code and the
+  // provider simply redisplays the form without mailing a new code.
   input.focus();
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
   if (setter) setter.call(input, securityCode);
@@ -703,8 +711,24 @@ _COMMUFA_CODE_SUBMISSION_TEMPLATE = r"""(() => {
   input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
   input.dispatchEvent(new Event("change", { bubbles: true }));
   input.dispatchEvent(new Event("blur", { bubbles: true }));
+  return { ok: true, filled: true };
+})()"""
 
-  const form = input.closest("form");
+
+# Runs after the page has had time to commit the value entered above. It never
+# contains the one-time code.
+_COMMUFA_CODE_SUBMIT_TEMPLATE = r"""(() => {
+  const normalize = (value) => String(value || "").normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
+  const visible = (el) => {
+    if (!el || el.disabled) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+  };
+  if (location.protocol !== "https:" || location.hostname !== "mypage.commufa.jp") return { ok: false, error: "ORIGIN_MISMATCH" };
+  const filled = [...document.querySelectorAll("input")].filter(visible).find((el) => String(el.value || "").trim().length >= 4);
+  if (!filled) return { ok: false, error: "FIELD_NOT_FOUND" };
+  const form = filled.closest("form");
   const scope = form || document;
   const controls = [
     ...scope.querySelectorAll(
