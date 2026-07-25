@@ -547,3 +547,31 @@ class CommufaCodeCommitTest(unittest.TestCase):
         sleep.assert_called_once()
 
 
+
+class AbandonedSlotReclaimTest(unittest.TestCase):
+    """A new acquisition must not be blocked by an abandoned attempt.
+
+    The registry allows one attempt at a time. When a challenge is abandoned
+    without its token (a lost session, an errored run), the slot stayed held
+    for its whole TTL, so the next acquisition logged in and made the provider
+    mail a code before failing to take the slot.
+    """
+
+    def test_close_all_frees_the_slot_for_a_new_attempt(self) -> None:
+        from src.automation import security_challenge as challenge_module
+
+        registry = challenge_module.BrowserLeaseRegistry(
+            timer_factory=FakeTimer,
+        )
+        registry.claim_attempt(service_id="commufa", target_month="2026-06")
+
+        with self.assertRaises(challenge_module.BrowserAttemptUnavailableError):
+            registry.claim_attempt(service_id="commufa", target_month="2026-06")
+
+        registry.close_all()
+
+        # The slot is free again, so the owner's retry can proceed.
+        ticket = registry.claim_attempt(
+            service_id="commufa", target_month="2026-06"
+        )
+        self.assertEqual("commufa", ticket.service_id)

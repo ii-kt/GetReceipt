@@ -246,6 +246,17 @@ def queue_batch(target_month: str, service_ids: list[str]) -> None:
     if not service_ids:
         return
     discard_security_challenge()
+    # An abandoned attempt keeps the single browser slot for its whole TTL. The
+    # owner starting a new acquisition supersedes it, so reclaim the slot;
+    # otherwise the provider logs in and mails a code, and only then does the
+    # lease creation fail.
+    try:
+        challenge_runtime.browser_lease_registry.close_all()
+    except Exception as error:
+        LOGGER.error(
+            "Could not release a stale acquisition slot (%s)",
+            type(error).__name__,
+        )
     st.session_state[BATCH_KEY] = {
         "target_month": target_month,
         "service_ids": service_ids,
@@ -604,10 +615,12 @@ def execute_next_service(storage: DriveStorage, batch: dict[str, Any]) -> None:
             batch["phase"] = "awaiting_security_code"
             st.session_state[BATCH_KEY] = batch
             runtime_preserved = True
-    except Exception:
+    except Exception as error:
         unexpected_error = (
-            "自動取得を開始できませんでした。時間をおいて再試行してください。"
-        )
+            "自動取得を開始できませんでした。時間をおいて再試行してください。 "
+            f"[{type(error).__name__}: {error}]"
+        )[:300]
+        LOGGER.warning("Acquisition attempt failed (%s)", type(error).__name__)
     finally:
         if not runtime_preserved:
             cleanup_error = cleanup_runtime(browser, run_dir)
