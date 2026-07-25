@@ -207,3 +207,69 @@ def _config(key: str) -> MicrosoftOAuthConfig:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MicrosoftAuthorizationCodeShapeTest(unittest.TestCase):
+    """A real Microsoft authorization code is opaque and contains symbols."""
+
+    def test_realistic_code_with_symbols_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            key = Fernet.generate_key().decode("ascii")
+            config = MicrosoftOAuthConfig(
+                client_id="11111111-1111-1111-1111-111111111111",
+                client_secret="confidential-client-secret-value",
+                redirect_uri="https://get-receipt.streamlit.app/",
+                encryption_key=key,
+            )
+            token_store = MicrosoftTokenStore(
+                database_path=Path(temp) / "jobs.sqlite3",
+                owner_id="owner-1",
+                encryption_key=key,
+            )
+            session = FakeSession()
+            manager = MicrosoftOAuthManager(
+                config=config,
+                token_store=token_store,
+                session=session,
+            )
+            state = parse_qs(urlsplit(manager.start()["authorization_url"]).query)[
+                "state"
+            ][0]
+
+            # Shape taken from a live Entra callback: dots, underscores,
+            # hyphens, "!" and "*" all appear in the code.
+            realistic_code = (
+                "M.C512_BAY.2.U.-Ah!Q1lIzYyZ*abcDEF0123456789"
+                "gHiJkLmNoPqRsTuVwXyZ_-.~abcdefghijklmnop"
+            )
+            completed = manager.complete(code=realistic_code, state=state)
+
+            self.assertTrue(completed["connected"])
+            self.assertEqual(realistic_code, session.forms[0]["code"])
+
+    def test_control_characters_are_still_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            key = Fernet.generate_key().decode("ascii")
+            manager = MicrosoftOAuthManager(
+                config=MicrosoftOAuthConfig(
+                    client_id="11111111-1111-1111-1111-111111111111",
+                    client_secret="confidential-client-secret-value",
+                    redirect_uri="https://get-receipt.streamlit.app/",
+                    encryption_key=key,
+                ),
+                token_store=MicrosoftTokenStore(
+                    database_path=Path(temp) / "jobs.sqlite3",
+                    owner_id="owner-1",
+                    encryption_key=key,
+                ),
+                session=FakeSession(),
+            )
+            state = parse_qs(urlsplit(manager.start()["authorization_url"]).query)[
+                "state"
+            ][0]
+
+            with self.assertRaises(MicrosoftOAuthError) as rejected:
+                manager.complete(code="bad\ncode\rinjection" + "x" * 20, state=state)
+            self.assertEqual(
+                "MICROSOFT_OAUTH_RESPONSE_INVALID", rejected.exception.code
+            )

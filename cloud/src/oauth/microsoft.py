@@ -25,7 +25,13 @@ MICROSOFT_SCOPES = (
     "https://graph.microsoft.com/Mail.Read",
 )
 _CLIENT_ID = re.compile(r"^[A-Za-z0-9._-]{8,200}$")
+# PKCE verifiers and our own state use the unreserved set only.
 _OAUTH_VALUE = re.compile(r"^[A-Za-z0-9._~-]{20,2048}$")
+# A provider's authorization code is opaque: RFC 6749 allows any VSCHAR
+# (printable ASCII), and Microsoft codes really do contain characters such
+# as "!" and "*". Rejecting them here made every real callback fail with
+# MICROSOFT_OAUTH_RESPONSE_INVALID.
+_OAUTH_CODE = re.compile(r"^[\x20-\x7E]{20,4096}$")
 
 
 class MicrosoftOAuthError(RuntimeError):
@@ -370,7 +376,7 @@ class MicrosoftOAuthManager:
     def complete(self, *, code: str, state: str) -> dict[str, Any]:
         normalized_code = str(code or "").strip()
         normalized_state = str(state or "").strip()
-        if not _OAUTH_VALUE.fullmatch(normalized_code) or not _OAUTH_VALUE.fullmatch(normalized_state):
+        if not _OAUTH_CODE.fullmatch(normalized_code) or not _OAUTH_VALUE.fullmatch(normalized_state):
             raise MicrosoftOAuthError(
                 "Microsoft認証応答の形式が不正です。",
                 code="MICROSOFT_OAUTH_RESPONSE_INVALID",
