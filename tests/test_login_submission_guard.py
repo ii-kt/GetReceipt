@@ -93,3 +93,22 @@ class LoginSubmissionGuardTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InPageSubmissionTest(unittest.TestCase):
+    """A control the page already activated must not be clicked again."""
+
+    def test_in_page_click_is_not_repeated_by_coordinates(self) -> None:
+        browser = _Browser()
+        fetcher = CommufaAutoFetcher(browser)  # type: ignore[arg-type]
+        result = {
+            "attempted": True,
+            "code": "SUBMIT_PASSWORD",
+            "clickedInPage": True,
+            "click": {"x": 70, "y": 80},
+        }
+
+        with patch("src.automation.official_sites.time.sleep"):
+            self.assertTrue(fetcher._apply_login_result(result))
+
+        self.assertEqual([], browser.clicks)

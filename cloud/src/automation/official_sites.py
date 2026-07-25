@@ -251,6 +251,11 @@ def _apply_auto_login_result(browser: ManagedBrowser, result: dict[str, Any], se
             advice="ワンタイムコード、CAPTCHA、本人確認などサイト側の追加認証が出ているため、通常ログインの自動入力では続行できません。",
             challenge_kind=challenge_kind,
         )
+    if result.get("attempted") and result.get("clickedInPage"):
+        # The page already activated the control. A second click here would
+        # submit the credentials twice.
+        time.sleep(1.2)
+        return True
     if result.get("attempted") and result.get("click"):
         click = result["click"]
         browser.click_at(int(click["x"]), int(click["y"]))
@@ -1051,7 +1056,14 @@ if (passwordInput) {
   if (!payload.password && !String(passwordInput.value || "").trim()) return { attempted: false, code: "PASSWORD_NOT_CONFIGURED", reason: "パスワードが未設定です。" };
   if (payload.password) setValue(passwordInput, payload.password);
   const button = byText(["ログイン", "login", "サインイン", "sign in", "送信", "submit", "次へ", "next"], ["戻る", "キャンセル", "お忘れ", "新規", "登録"]);
-  if (button) return { attempted: true, code: "SUBMIT_PASSWORD", click: pointOf(button) };
+  if (button) {
+    // Activate the control in the page. A coordinate click can miss when the
+    // layout shifts between measuring and clicking, and these single-page
+    // login views re-render as the fields are filled.
+    const point = pointOf(button);
+    button.click();
+    return { attempted: true, code: "SUBMIT_PASSWORD", clickedInPage: true, click: point };
+  }
   return { attempted: true, code: "SUBMIT_PASSWORD_ENTER", pressEnter: true };
 }
 if (accountInput) {
