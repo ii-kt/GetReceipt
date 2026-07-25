@@ -6,7 +6,7 @@ import re
 import shutil
 import unicodedata
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -17,6 +17,11 @@ from src.automation.browser_session import ManagedBrowser, find_browser_executab
 from src.automation import security_challenge as challenge_runtime
 from src.automation.auth_challenges import profile_for
 from src.automation.credentials import credentials_configured, service_credentials
+from src.automation.mail_codes import (
+    MailCodeUnavailableError,
+    MailVerificationCodeReader,
+    VERIFICATION_CODE_SOURCES,
+)
 from src.automation.providers import build_receipt_fetcher
 from src.config import (
     DATA_DIR,
@@ -448,6 +453,65 @@ def restore_security_code_waiting(
     return True
 
 
+def resume_with_mailed_code(
+    *,
+    service_id: str,
+    target_month: str,
+    fetcher: Any,
+    storage: DriveStorage,
+    result: Any,
+    storage_secrets: Any,
+    requested_after: datetime,
+    status_box: Any,
+) -> Any | None:
+    """Finish a verification-code challenge using the owner's own mailbox.
+
+    Returns the retried acquisition result, or None when the code could not be
+    read and the owner must enter it manually.
+    """
+
+    challenge = getattr(result, "challenge", None)
+    if str(getattr(challenge, "kind", "")) != "verification_code":
+        return None
+    source = VERIFICATION_CODE_SOURCES.get(service_id)
+    resume = getattr(fetcher, "resume_after_security_code", None)
+    if source is None or not callable(resume):
+        return None
+    graph_manager = graph_manager_from_secrets(storage_secrets, storage)
+    if graph_manager is None:
+        return None
+    try:
+        if not bool(graph_manager.status().get("connected")):
+            return None
+    except Exception:
+        return None
+
+    status_box.write("メールに届いた確認コードを自動で読み取っています。")
+    code = ""
+    try:
+        reader = MailVerificationCodeReader(graph_manager.access_token)
+        code = reader.wait_for_code(source, requested_after=requested_after)
+        return run_auto_acquisition(
+            service_id=service_id,
+            target_month=target_month,
+            fetcher=fetcher,
+            storage=storage,
+            on_progress=lambda event: status_box.write(event.message),
+            fetch_statement=lambda month, value=code: resume(month, value),
+        )
+    except MailCodeUnavailableError:
+        status_box.write("確認コードを自動取得できませんでした。手動入力へ切り替えます。")
+        return None
+    except Exception as error:
+        LOGGER.warning(
+            "Automatic verification code resume failed (%s)",
+            type(error).__name__,
+        )
+        return None
+    finally:
+        code = ""
+
+
 def _run_tokuten_via_graph(
     *,
     storage: DriveStorage,
@@ -575,6 +639,7 @@ def execute_next_service(storage: DriveStorage, batch: dict[str, Any]) -> None:
             download_dir=run_dir / "downloads",
         )
         fetcher = build_receipt_fetcher(service_id, browser, credentials)
+        attempt_started_at = datetime.now(timezone.utc)
         result = run_auto_acquisition(
             service_id=service_id,
             target_month=target_month,
@@ -582,6 +647,21 @@ def execute_next_service(storage: DriveStorage, batch: dict[str, Any]) -> None:
             storage=storage,
             on_progress=lambda event: status_box.write(event.message),
         )
+        if getattr(result, "action_required", False):
+            # The provider mails the code to a mailbox this app can already
+            # read, so finish the challenge without asking the owner.
+            resumed = resume_with_mailed_code(
+                service_id=service_id,
+                target_month=target_month,
+                fetcher=fetcher,
+                storage=storage,
+                result=result,
+                storage_secrets=st.secrets,
+                requested_after=attempt_started_at,
+                status_box=status_box,
+            )
+            if resumed is not None:
+                result = resumed
         if getattr(result, "action_required", False):
             if not callable(getattr(fetcher, "resume_after_security_code", None)):
                 raise RuntimeError("この請求元は確認コードによる安全な再開に対応していません。")
