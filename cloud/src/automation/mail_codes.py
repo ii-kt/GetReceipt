@@ -201,3 +201,13 @@ def _parse_timestamp(value: Any) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+# Checked against the owner's mailbox on 2026-07-25:
+#   - commufa   : sends the code by mail -> automated above.
+#   - webbilling: no verification-code mail exists (only billing notices and
+#                 registration confirmations), so its code arrives by SMS or
+#                 not at all and cannot be read here.
+#   - epos      : the three-digit code is printed on the card, never mailed,
+#                 and is deliberately not stored.
+#   - tokuten   : no verification step; the invoice is read through Graph.
