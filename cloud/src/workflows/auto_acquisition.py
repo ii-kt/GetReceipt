@@ -199,7 +199,13 @@ def _run_auto_acquisition_unlocked(
                 events=tuple(events),
                 challenge=SecurityChallenge(kind=challenge_kind, message=message),
             )
-        detail = f"{type(error).__name__}: {error}"[:300]
+        # A provider error carries the page state that explains the failure;
+        # without it a timeout is indistinguishable from a wrong password.
+        advice = str(getattr(error, "advice", "") or "")
+        detail = f"{type(error).__name__}: {error}"
+        if advice:
+            detail = f"{detail} / {advice}"
+        detail = detail[:400]
         LOGGER.warning(
             "Acquisition fetch failed for %s (%s)", service_id, detail
         )
