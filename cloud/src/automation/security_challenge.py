@@ -588,8 +588,15 @@ def submit_commufa_security_code(browser: ManagedBrowser, code: str) -> None:
             "コミュファの確認コード入力欄を一意に確認できませんでした。"
         )
     if error_code == "SUBMIT_NOT_FOUND":
+        # The labels are page UI text, never the one-time code.
+        seen = result.get("controls")
+        detail = ""
+        if isinstance(seen, list) and seen:
+            detail = "（画面上のボタン: " + " / ".join(
+                str(label)[:24] for label in seen[:6]
+            ) + "）"
         raise SecurityChallengeSubmissionError(
-            "コミュファの確認コード送信ボタンを確認できませんでした。"
+            "コミュファの確認コード送信ボタンを確認できませんでした。" + detail
         )
     raise SecurityChallengeSubmissionError(
         "コミュファの確認コードを安全に送信できませんでした。"
@@ -685,22 +692,50 @@ _COMMUFA_CODE_SUBMISSION_TEMPLATE = r"""(() => {
   });
   if (candidates.length !== 1) return { ok: false, error: "FIELD_NOT_FOUND" };
   const input = candidates[0];
-  const form = input.closest("form");
-  const controls = [...(form || document).querySelectorAll("button, input[type='submit']")].filter(visible);
-  const submitWords = ["確認", "認証", "送信", "次へ", "verify", "submit", "continue"];
-  const submit = controls
-    .map((el) => ({ el, label: normalize(el.innerText || el.value || el.getAttribute("aria-label")) }))
-    .filter((item) => submitWords.some((word) => item.label.includes(normalize(word))))
-    .sort((a, b) => a.label.length - b.label.length)[0]?.el;
-  if (!submit) return { ok: false, error: "SUBMIT_NOT_FOUND" };
+
+  // Enter the code before looking for the submit control: these forms keep
+  // the button disabled until the field holds a valid code, and a disabled
+  // button is not a visible candidate.
   input.focus();
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
   if (setter) setter.call(input, securityCode);
   else input.value = securityCode;
   input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
   input.dispatchEvent(new Event("change", { bubbles: true }));
-  submit.click();
-  return { ok: true };
+  input.dispatchEvent(new Event("blur", { bubbles: true }));
+
+  const form = input.closest("form");
+  const scope = form || document;
+  const controls = [
+    ...scope.querySelectorAll(
+      "button, input[type='submit'], input[type='button'], [role='button'], a[href='#']"
+    ),
+  ].filter(visible);
+  const submitWords = ["確認", "認証", "送信", "次へ", "進む", "ログイン", "verify", "submit", "continue", "next"];
+  const submit = controls
+    .map((el) => ({ el, label: normalize(el.innerText || el.value || el.getAttribute("aria-label")) }))
+    .filter((item) => submitWords.some((word) => item.label.includes(normalize(word))))
+    .sort((a, b) => a.label.length - b.label.length)[0]?.el;
+  if (submit) {
+    submit.click();
+    return { ok: true };
+  }
+  // Some providers submit on Enter with no button at all.
+  if (form && typeof form.requestSubmit === "function") {
+    form.requestSubmit();
+    return { ok: true };
+  }
+  const enter = { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true };
+  input.dispatchEvent(new KeyboardEvent("keydown", enter));
+  input.dispatchEvent(new KeyboardEvent("keypress", enter));
+  input.dispatchEvent(new KeyboardEvent("keyup", enter));
+  if (form) return { ok: true };
+  // Report the visible control labels so an unknown layout is diagnosable.
+  return {
+    ok: false,
+    error: "SUBMIT_NOT_FOUND",
+    controls: controls.slice(0, 8).map((el) => normalize(el.innerText || el.value || el.getAttribute("aria-label")).slice(0, 24)),
+  };
 })()"""
 
 
