@@ -680,6 +680,7 @@ def resume_security_code(
     service = service_by_id(service_id)
     result = None
     unexpected_error = ""
+    resume_detail = ""
     status_box = st.status(
         f"{service.label}へ確認コードを送信し、自動取得を再開しています。",
         expanded=True,
@@ -713,11 +714,13 @@ def resume_security_code(
         )
         status_box.update(label="新しい確認コードを発行します。", state="running")
         st.rerun()
-    except Exception:
+    except Exception as error:
         unexpected_error = (
             "確認コード送信後の自動取得を再開できませんでした。"
             "新しい確認コードで再試行してください。"
         )
+        resume_detail = f"{type(error).__name__}: {error}"[:300]
+        LOGGER.warning("Security code resume failed (%s)", resume_detail)
 
     if result is not None and getattr(result, "action_required", False):
         updated = dict(challenge)
@@ -740,9 +743,11 @@ def resume_security_code(
 
     failure_code = ""
     failure_message = ""
+    failure_detail = ""
     if unexpected_error:
         failure_code = "SECURITY_CODE_RESUME_FAILED"
         failure_message = unexpected_error
+        failure_detail = resume_detail
     elif result is None:
         failure_code = "SECURITY_CODE_RESUME_FAILED"
         failure_message = "確認コード送信後の自動取得結果を確認できませんでした。"
@@ -750,6 +755,7 @@ def resume_security_code(
         failure = result.failure
         failure_code = failure.code if failure else "ACQUISITION_FAILED"
         failure_message = failure.message if failure else "自動取得に失敗しました。"
+        failure_detail = str(getattr(failure, "detail", "") or "")
 
     if failure_code:
         batch_complete = fail_batch_service(
@@ -757,6 +763,7 @@ def resume_security_code(
             service_id,
             code=failure_code,
             message=failure_message,
+            detail=failure_detail,
         )
         status_box.update(
             label=(
