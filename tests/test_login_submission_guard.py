@@ -11,7 +11,7 @@ CLOUD = ROOT / "cloud"
 if str(CLOUD) not in sys.path:
     sys.path.insert(0, str(CLOUD))
 
-from src.automation.epos import AcquisitionError, EposAutoFetcher  # noqa: E402
+from src.automation.epos import EposAutoFetcher  # noqa: E402
 from src.automation.official_sites import (  # noqa: E402
     CommufaAutoFetcher,
     WebBillingAutoFetcher,
@@ -42,10 +42,10 @@ class LoginSubmissionGuardTest(unittest.TestCase):
 
         with patch("src.automation.epos.time.sleep"):
             self.assertTrue(fetcher._apply_login_result(result))
-            with self.assertRaises(AcquisitionError) as raised:
-                fetcher._apply_login_result(result)
+            # The password is never resent, but the attempt continues so a slow
+            # provider page is not mistaken for a failure.
+            self.assertFalse(fetcher._apply_login_result(result))
 
-        self.assertEqual("LOGIN_SUBMISSION_LIMIT_REACHED", raised.exception.code)
         self.assertEqual([(10, 20)], browser.clicks)
 
     def test_epos_human_layout_submit_has_the_same_limit(self) -> None:
@@ -54,8 +54,7 @@ class LoginSubmissionGuardTest(unittest.TestCase):
         layout = {"buttonPoint": {"x": 30, "y": 40}}
 
         fetcher._submit_epos_login_button(layout)
-        with self.assertRaises(AcquisitionError):
-            fetcher._submit_epos_login_button(layout)
+        fetcher._submit_epos_login_button(layout)
 
         self.assertEqual([(30, 40)], browser.clicks)
 
@@ -70,10 +69,10 @@ class LoginSubmissionGuardTest(unittest.TestCase):
 
         with patch("src.automation.official_sites.time.sleep"):
             self.assertTrue(fetcher._apply_login_result(result))
-            with self.assertRaises(AcquisitionError) as raised:
-                fetcher._apply_login_result(result)
+            # A second pass must not resend the password, and must not end the
+            # acquisition: the provider may simply still be navigating.
+            self.assertFalse(fetcher._apply_login_result(result))
 
-        self.assertEqual("LOGIN_SUBMISSION_LIMIT_REACHED", raised.exception.code)
         self.assertEqual(["Enter"], browser.keys)
 
     def test_webbilling_submits_credentials_only_once(self) -> None:
@@ -87,10 +86,8 @@ class LoginSubmissionGuardTest(unittest.TestCase):
 
         with patch("src.automation.official_sites.time.sleep"):
             self.assertTrue(fetcher._apply_login_result(result))
-            with self.assertRaises(AcquisitionError) as raised:
-                fetcher._apply_login_result(result)
+            self.assertFalse(fetcher._apply_login_result(result))
 
-        self.assertEqual("LOGIN_SUBMISSION_LIMIT_REACHED", raised.exception.code)
         self.assertEqual([(50, 60)], browser.clicks)
 
 

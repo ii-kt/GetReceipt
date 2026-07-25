@@ -412,25 +412,29 @@ class CommufaAutoFetcher:
         if str(result.get("code") or "") in {
             "SUBMIT_PASSWORD",
             "SUBMIT_PASSWORD_ENTER",
-        }:
-            self._guard_credential_submission()
+        } and not self._allow_credential_submission():
+            # Credentials were already sent in this attempt. The provider is
+            # simply still working (or is showing a verification step), so keep
+            # waiting instead of ending the job.
+            return False
         return _apply_auto_login_result(
             self.browser,
             result,
             self.service.label,
         )
 
-    def _guard_credential_submission(self) -> None:
+    def _allow_credential_submission(self) -> bool:
+        """Send the password at most once per attempt, without failing the job.
+
+        Repeating a password submission is what risks an account lock, so it
+        stays blocked. Reaching this state is normal (the page has not
+        navigated yet), so it must not abort the acquisition.
+        """
+
         if self._credential_submission_attempted:
-            raise AcquisitionError(
-                "コミュファへのログイン送信を繰り返さず、安全のため停止しました。",
-                code="LOGIN_SUBMISSION_LIMIT_REACHED",
-                advice=(
-                    "同じ取得試行ではID・パスワードを1回だけ送信します。"
-                    "追加認証画面または公式サイトの状態を確認してから再試行してください。"
-                ),
-            )
+            return False
         self._credential_submission_attempted = True
+        return True
 
 
 class TokutenAutoFetcher:
@@ -761,25 +765,23 @@ class WebBillingAutoFetcher:
         if str(result.get("code") or "") in {
             "SUBMIT_PASSWORD",
             "SUBMIT_PASSWORD_ENTER",
-        }:
-            self._guard_credential_submission()
+        } and not self._allow_credential_submission():
+            # Already submitted in this attempt: keep waiting for the provider
+            # instead of ending the job.
+            return False
         return _apply_auto_login_result(
             self.browser,
             result,
             self.service.label,
         )
 
-    def _guard_credential_submission(self) -> None:
+    def _allow_credential_submission(self) -> bool:
+        """Send the password at most once per attempt, without failing the job."""
+
         if self._credential_submission_attempted:
-            raise AcquisitionError(
-                "Webビリングへのログイン送信を繰り返さず、安全のため停止しました。",
-                code="LOGIN_SUBMISSION_LIMIT_REACHED",
-                advice=(
-                    "同じ取得試行ではID・パスワードを1回だけ送信します。"
-                    "追加認証画面または公式サイトの状態を確認してから再試行してください。"
-                ),
-            )
+            return False
         self._credential_submission_attempted = True
+        return True
 
 
 def _filename_matches_month(file_name: str, year: int, month: int) -> bool:

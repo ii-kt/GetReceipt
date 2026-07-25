@@ -340,8 +340,13 @@ class EposAutoFetcher:
                 advice="ワンタイムコード、CAPTCHA、本人確認などサイト側の追加認証が出ているため、通常ログインの自動入力では続行できません。",
                 challenge_kind=challenge_kind,
             )
-        if code in {"SUBMIT_PASSWORD", "SUBMIT_PASSWORD_ENTER"}:
-            self._guard_credential_submission()
+        if code in {
+            "SUBMIT_PASSWORD",
+            "SUBMIT_PASSWORD_ENTER",
+        } and not self._allow_credential_submission():
+            # Already submitted in this attempt: keep waiting for the provider
+            # instead of ending the job.
+            return False
         if result.get("attempted") and result.get("click"):
             click = result["click"]
             self.browser.click_at(int(click["x"]), int(click["y"]))
@@ -430,23 +435,27 @@ return {
         )
 
     def _submit_epos_login_button(self, layout: dict[str, Any]) -> None:
-        self._guard_credential_submission()
+        if not self._allow_credential_submission():
+            # Already submitted in this attempt: keep waiting for the provider
+            # instead of ending the job.
+            return
         point = layout["buttonPoint"]
         self.browser.click_at(int(point["x"]), int(point["y"]))
 
-    def _guard_credential_submission(self) -> None:
+    def _allow_credential_submission(self) -> bool:
+        """Send the password at most once per attempt, without failing the job.
+
+        Repeating a submission is what risks an account lock, so it stays
+        blocked. Arriving here again is normal while the page settles, so it
+        must not abort the acquisition.
+        """
+
         if self._credential_submission_attempted:
-            raise AcquisitionError(
-                "エポスカードへのログイン送信を繰り返さず、安全のため停止しました。",
-                code="LOGIN_SUBMISSION_LIMIT_REACHED",
-                advice=(
-                    "同じ取得試行ではID・パスワードを1回だけ送信します。"
-                    "追加認証画面または公式サイトの状態を確認してから再試行してください。"
-                ),
-            )
+            return False
         # Mark before the click/Enter so an uncertain browser response can
         # never cause a second credential submission in the same attempt.
         self._credential_submission_attempted = True
+        return True
 
     def _perform_human_login_attempt(self) -> bool:
         payload = _login_payload(self.credentials)
