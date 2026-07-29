@@ -634,13 +634,19 @@ class VerificationViewIsNotAnotherChallengeTest(unittest.TestCase):
 
         return challenge_module._COMMUFA_CHALLENGE_PROBE
 
-    def test_code_words_no_longer_escalate_to_other(self) -> None:
+    def test_no_speculative_challenge_wording_remains(self) -> None:
+        """Only evidence-backed challenges may end a run.
+
+        This provider's login second factor is the emailed code, and a CAPTCHA
+        is detected from the DOM. Guessed wordings produced false positives
+        that killed runs right after a correct code.
+        """
+
         probe = self._probe()
-        escalation = probe.split("const challengeWords")[1].split("]")[0]
-        for word in ("確認コード", "認証コード", "ワンタイム", "セキュリティコード"):
-            self.assertNotIn(word, escalation)
-        for word in ("本人確認", "追加認証", "秘密の質問"):
-            self.assertIn(word, escalation)
+        self.assertNotIn("challengeWords", probe)
+        self.assertNotIn("秘密の質問", probe)
+        # A CAPTCHA is still detected, from the DOM rather than a guess.
+        self.assertIn('kind: "captcha"', probe)
 
     def test_verification_view_is_recognised_without_its_field(self) -> None:
         probe = self._probe()

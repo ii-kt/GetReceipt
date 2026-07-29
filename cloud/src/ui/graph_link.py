@@ -75,8 +75,10 @@ def render_graph_connection(
     with st.container(border=True):
         st.markdown("**電気（トクテン）の自動取得にはMicrosoftメール接続が必要です**")
         st.caption(
-            "ブラウザ操作ではなく、Microsoft公式のメール読み取り（Mail.Read）で"
-            "請求PDFを取得します。1回だけ許可すれば次回以降は自動です。"
+            "ブラウザ操作ではなく、Microsoft公式のメールAPI（Mail.ReadWrite）で"
+            "請求PDFと確認コードを読み取ります。書き込み権限は、使用済みの"
+            "確認コードメールを既読にしてアーカイブするためだけに使い、"
+            "メール送信は行いません。1回だけ許可すれば次回以降は自動です。"
         )
         try:
             payload = manager.start()

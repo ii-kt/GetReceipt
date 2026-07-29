@@ -675,11 +675,12 @@ _COMMUFA_CHALLENGE_PROBE = r"""(() => {
     || pageText.includes(normalize("コードを再送信"))
   );
   if (onVerificationView) return { kind: "verification_code", codeRejected: rejected };
-  // Only words that cannot belong to the code flow may escalate: the code
-  // page itself mentions 確認コード and would otherwise self-report as another
-  // kind of challenge.
-  const challengeWords = ["本人確認", "追加認証", "秘密の質問"];
-  if (challengeWords.some((word) => pageText.includes(normalize(word)))) return { kind: "other", codeRejected: false };
+  // No other challenge type is known for this provider: its login second
+  // factor is the emailed code above, and a CAPTCHA is already detected from
+  // the DOM. Guessing at wordings such as 秘密の質問 only produced false
+  // positives, so an unrecognised page is reported as unknown and the caller
+  // keeps waiting; a genuinely stuck page is then surfaced by the timeout,
+  // which names the URL and the visible text.
   return { kind: "", codeRejected: false };
 })()"""
 
