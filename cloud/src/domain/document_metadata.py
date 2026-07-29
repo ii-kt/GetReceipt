@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import date
 from io import BytesIO
@@ -14,7 +15,15 @@ class ExtractedReceiptData:
 
 
 def normalize_text(value: str) -> str:
-    return re.sub(r"\s+", " ", str(value or "").replace("\u00a0", " ")).strip()
+    """Collapse whitespace and fold full-width forms to their ASCII shape.
+
+    Japanese statements print amounts and dates in full-width digits, as in
+    "\uff14\uff0c\uff18\uff18\uff12\u5186". Without this the amount and date patterns, which match
+    ASCII digits, find nothing and a readable receipt looks unreadable.
+    """
+
+    folded = unicodedata.normalize("NFKC", str(value or "")).replace("\u00a0", " ")
+    return re.sub(r"\s+", " ", folded).strip()
 
 
 def extract_pdf_text(content: bytes) -> str:
@@ -131,7 +140,10 @@ def extract_transaction_date(
 
     normalized = normalize_text(text)
     patterns = (
-        re.compile(r"((?:19|20)\d{2})\D{1,6}(\d{1,2})\D{1,6}(\d{1,2})"),
+        # Require the day marker. Without it "2026年 6月分 4,882円" reads as
+        # the 4th of June, and that false date beat the real payment date.
+        re.compile(r"((?:19|20)\d{2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日"),
+        re.compile(r"((?:19|20)\d{2})[/.-](\d{1,2})[/.-](\d{1,2})"),
         re.compile(r"((?:19|20)\d{2})(0[1-9]|1[0-2])([0-2]\d|3[01])"),
     )
     candidates: list[tuple[int, date]] = []

@@ -253,3 +253,33 @@ class OcrRepairsMisreadCharactersTest(unittest.TestCase):
         from src.domain.document_metadata import _repair_ocr_text
 
         self.assertEqual("2026年6月ご利用分", _repair_ocr_text("2026年6月ご利用分"))
+
+
+class DateNeedsItsDayMarkerTest(unittest.TestCase):
+    """A digit from an amount must not be read as a day.
+
+    An NTT certificate prints "2026年 6月分 4,882円 ... 2026年 6月 9日".
+    A loose pattern read "6月分 4" as the 4th of June, and that false date
+    beat the real payment date.
+    """
+
+    def test_amount_after_a_month_is_not_a_date(self) -> None:
+        from src.domain.document_metadata import extract_transaction_date
+
+        text = "支払年月日 記事 2026年 6月分 4,882円 2026年 6月 9日 ドコモご利用分"
+
+        self.assertEqual(
+            "2026-06-09",
+            str(extract_transaction_date(text, prefer_month="2026-06")),
+        )
+
+    def test_full_width_statement_is_readable(self) -> None:
+        from src.domain.document_metadata import (
+            extract_amount_yen,
+            extract_transaction_date,
+        )
+
+        text = "ご利用金額 ４，８８２円 支払年月日 ２０２６年 ６月 ９日"
+
+        self.assertEqual(4882, extract_amount_yen(text))
+        self.assertEqual("2026-06-09", str(extract_transaction_date(text)))
