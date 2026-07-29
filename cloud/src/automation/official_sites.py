@@ -128,14 +128,23 @@ def _passed_security_code_gate(summary: dict[str, Any]) -> bool:
     parsed = urlsplit(str(summary.get("url") or ""))
     if parsed.hostname != "mypage.commufa.jp":
         return False
-    if "/login" in (parsed.path or "").lower():
+    path = (parsed.path or "").lower()
+    # The verification step lives under its own identity path and carries no
+    # password field, so it would otherwise look like a cleared login.
+    if "/login" in path or "/identity/verification" in path:
         return False
     text = _normalize(str(summary.get("text") or ""))
     if not text:
         return False
     return not any(
         _normalize(marker) in text
-        for marker in ("ログインに失敗しました", "ログインid（メールアドレス）")
+        for marker in (
+            "ログインに失敗しました",
+            "ログインid（メールアドレス）",
+            "id を検証",
+            "確認コード入力",
+            "コードを再送信",
+        )
     )
 
 
@@ -176,10 +185,24 @@ def _pdf_or_raise(content: bytes, service_label: str) -> None:
 
 
 def _action_error(action: dict[str, Any], fallback_message: str, fallback_code: str) -> AcquisitionError:
+    advice = str(
+        action.get("advice")
+        or "取得用ブラウザで対象月の明細が表示されているか確認してください。"
+    )
+    # The step script already collects what it could see. Discarding it left
+    # "entry point not found" with no way to tell which page we were on.
+    seen = action.get("visibleControls")
+    if isinstance(seen, list) and seen:
+        labels = " / ".join(str(label)[:28] for label in seen[:12] if str(label).strip())
+        if labels:
+            advice = f"{advice} 画面上の操作: {labels}"
+    months = action.get("availableMonths")
+    if isinstance(months, list) and months:
+        advice = f"{advice} 確認できた年月: {' / '.join(str(m) for m in months[:12])}"
     return AcquisitionError(
         action.get("message") or fallback_message,
         code=action.get("code") or fallback_code,
-        advice=action.get("advice") or "取得用ブラウザで対象月の明細が表示されているか確認してください。",
+        advice=advice[:600],
     )
 
 

@@ -575,3 +575,48 @@ class AbandonedSlotReclaimTest(unittest.TestCase):
             service_id="commufa", target_month="2026-06"
         )
         self.assertEqual("commufa", ticket.service_id)
+
+
+class CommufaSubmitControlTest(unittest.TestCase):
+    """The verification form's submit control is 「検証」.
+
+    「コードを再送信」contains 「送信」, so a naive match reissues the code and
+    redisplays the same form, which is indistinguishable from a rejected code.
+    """
+
+    def _template(self) -> str:
+        from src.automation import security_challenge as challenge_module
+
+        return challenge_module._COMMUFA_CODE_SUBMIT_TEMPLATE
+
+    def test_verify_label_is_a_submit_word(self) -> None:
+        self.assertIn('"検証"', self._template())
+
+    def test_resend_is_excluded(self) -> None:
+        template = self._template()
+        self.assertIn('"再送信"', template)
+        self.assertIn("submitExcludes", template)
+
+    def test_fallback_uses_the_filled_field(self) -> None:
+        # A stale identifier here raised ReferenceError and hid the real cause.
+        template = self._template()
+        self.assertNotIn("input.dispatchEvent", template)
+        self.assertIn("filled.dispatchEvent", template)
+
+
+class VerificationPageIsNotLoggedInTest(unittest.TestCase):
+    def test_identity_verification_page_does_not_pass_the_gate(self) -> None:
+        from src.automation.official_sites import _passed_security_code_gate
+
+        self.assertFalse(
+            _passed_security_code_gate(
+                {
+                    "url": (
+                        "https://mypage.commufa.jp/join/_ui/identity/"
+                        "verification/method/EmailVerificationFinishUi/e"
+                    ),
+                    "passwordFields": 0,
+                    "text": "Myコミュファ ID を検証 確認コード コードを再送信",
+                }
+            )
+        )

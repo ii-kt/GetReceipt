@@ -735,25 +735,30 @@ _COMMUFA_CODE_SUBMIT_TEMPLATE = r"""(() => {
       "button, input[type='submit'], input[type='button'], [role='button'], a[href='#']"
     ),
   ].filter(visible);
-  const submitWords = ["確認", "認証", "送信", "次へ", "進む", "ログイン", "verify", "submit", "continue", "next"];
+  // "検証" is this provider's submit label. "再送信" must never be treated as a
+  // submit: clicking it reissues the code and redisplays the same form, which
+  // is indistinguishable from a rejected code.
+  const submitWords = ["検証", "確認", "認証", "送信", "次へ", "進む", "ログイン", "verify", "submit", "continue", "next"];
+  const submitExcludes = ["再送信", "送信し直", "resend", "キャンセル", "戻る", "cancel"];
   const submit = controls
     .map((el) => ({ el, label: normalize(el.innerText || el.value || el.getAttribute("aria-label")) }))
     .filter((item) => submitWords.some((word) => item.label.includes(normalize(word))))
+    .filter((item) => submitExcludes.every((word) => !item.label.includes(normalize(word))))
     .sort((a, b) => a.label.length - b.label.length)[0]?.el;
   if (submit) {
     submit.click();
-    return { ok: true };
+    return { ok: true, submitted: normalize(submit.innerText || submit.value || "").slice(0, 24) };
   }
   // Some providers submit on Enter with no button at all.
   if (form && typeof form.requestSubmit === "function") {
     form.requestSubmit();
-    return { ok: true };
+    return { ok: true, submitted: "form" };
   }
   const enter = { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true };
-  input.dispatchEvent(new KeyboardEvent("keydown", enter));
-  input.dispatchEvent(new KeyboardEvent("keypress", enter));
-  input.dispatchEvent(new KeyboardEvent("keyup", enter));
-  if (form) return { ok: true };
+  filled.dispatchEvent(new KeyboardEvent("keydown", enter));
+  filled.dispatchEvent(new KeyboardEvent("keypress", enter));
+  filled.dispatchEvent(new KeyboardEvent("keyup", enter));
+  if (form) return { ok: true, submitted: "enter" };
   // Report the visible control labels so an unknown layout is diagnosable.
   return {
     ok: false,
