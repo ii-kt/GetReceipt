@@ -11,3 +11,8 @@ google-auth>=2.29
 pypdf>=4.2
 requests>=2.32
 websockets>=12
+# Image-only invoices carry their amount only in the picture. This engine
+# needs no system package, so it works on Streamlit Cloud as-is.
+rapidocr-onnxruntime>=1.3
+pillow>=10
+numpy>=1.26

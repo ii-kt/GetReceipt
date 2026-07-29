@@ -229,7 +229,13 @@ def _run_auto_acquisition_unlocked(
 
     emit(Stage.EXTRACTING, "PDFから保存用メタデータを抽出しています。")
     try:
-        extracted = extract_receipt_data(content, str(getattr(statement, "metadata_text", "")))
+        extracted = extract_receipt_data(
+            content,
+            str(getattr(statement, "metadata_text", "")),
+            # An invoice carries several dates; the one in the month this
+            # receipt belongs to is the receipt's own.
+            prefer_month=expected_transaction_month(service.id, target_month),
+        )
         metadata = _receipt_metadata(
             service=service,
             target_month=target_month,

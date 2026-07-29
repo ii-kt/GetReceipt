@@ -44,7 +44,60 @@ def extract_pdf_text(content: bytes) -> str:
         # is the only thing left and cannot be confused with a real document's
         # internal structure, which is what produced fabricated amounts.
         return _decoded(content)
-    return normalize_text(" ".join(part for part in parts if part))
+    text = normalize_text(" ".join(part for part in parts if part))
+    if text:
+        return text
+    # A scanned or rendered-to-image invoice carries its amount only in the
+    # picture. This provider switched to that format, so read it rather than
+    # failing every month.
+    return _ocr_pdf_text(content)
+
+
+def _ocr_pdf_text(content: bytes) -> str:
+    """Read an image-only PDF with OCR, or return nothing.
+
+    OCR is optional: without the engine installed this returns no text, and
+    the callers refuse to save rather than guessing an amount.
+    """
+
+    try:
+        from pypdf import PdfReader
+        from rapidocr_onnxruntime import RapidOCR
+    except Exception:
+        return ""
+    try:
+        import numpy
+
+        engine = RapidOCR()
+        reader = PdfReader(BytesIO(content))
+        lines: list[str] = []
+        for page in reader.pages[:4]:
+            for image in list(page.images)[:2]:
+                result, _elapsed = engine(numpy.array(image.image.convert("RGB")))
+                lines.extend(str(item[1]) for item in (result or []))
+        return _repair_ocr_text(normalize_text(" ".join(lines)))
+    except Exception:
+        return ""
+
+
+# Observed misreadings on this invoice: the engine's model favours simplified
+# Chinese shapes, and renders 円 as 月.
+_OCR_CHARACTER_REPAIRS = {
+    "凳": "発",
+    "达": "込",
+    "额": "額",
+    "单": "単",
+    "绿": "録",
+    "豹": "約",
+}
+
+
+def _repair_ocr_text(text: str) -> str:
+    for wrong, right in _OCR_CHARACTER_REPAIRS.items():
+        text = text.replace(wrong, right)
+    # A comma-grouped number is never followed by 月 in Japanese, so this is
+    # the yen sign every time.
+    return re.sub(r"(\d{1,3}(?:,\d{3})+)\s*月", r"\1円", text)
 
 
 def _decoded(content: bytes) -> str:
@@ -63,7 +116,19 @@ def _decoded(content: bytes) -> str:
     return normalize_text(" ".join(part for part in parts if part))
 
 
-def extract_transaction_date(text: str) -> date | None:
+def extract_transaction_date(
+    text: str,
+    *,
+    prefer_month: str = "",
+) -> date | None:
+    """Find the receipt's own date.
+
+    An invoice carries several dates - issue date, usage period, due date -
+    and only the one inside the month the receipt belongs to identifies it.
+    When that month is known, prefer a candidate from it; the caller would
+    otherwise fall back to the first of the month and lose the real date.
+    """
+
     normalized = normalize_text(text)
     patterns = (
         re.compile(r"((?:19|20)\d{2})\D{1,6}(\d{1,2})\D{1,6}(\d{1,2})"),
@@ -86,6 +151,18 @@ def extract_transaction_date(text: str) -> date | None:
             candidates.append((score, candidate))
     if not candidates:
         return None
+    if prefer_month:
+        try:
+            year, month = (int(part) for part in prefer_month.split("-", 1))
+        except (TypeError, ValueError):
+            year = month = 0
+        in_month = [
+            item
+            for item in candidates
+            if (item[1].year, item[1].month) == (year, month)
+        ]
+        if in_month:
+            candidates = in_month
     return sorted(candidates, key=lambda item: (-item[0], item[1]))[0][1]
 
 
@@ -121,10 +198,14 @@ def extract_amount_yen(text: str) -> int | None:
     return sorted(candidates, key=lambda item: (-item[0], -item[1]))[0][1]
 
 
-def extract_receipt_data(content: bytes, *text_hints: str) -> ExtractedReceiptData:
+def extract_receipt_data(
+    content: bytes,
+    *text_hints: str,
+    prefer_month: str = "",
+) -> ExtractedReceiptData:
     text = normalize_text(" ".join([*text_hints, extract_pdf_text(content)]))
     return ExtractedReceiptData(
-        transaction_date=extract_transaction_date(text),
+        transaction_date=extract_transaction_date(text, prefer_month=prefer_month),
         amount_yen=extract_amount_yen(text),
         text_length=len(text),
     )

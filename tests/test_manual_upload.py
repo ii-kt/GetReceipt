@@ -198,3 +198,58 @@ class ImageOnlyPdfIsNotMinedForNumbersTest(unittest.TestCase):
                 target_month="2026-06",
                 content=self._image_only_pdf(),
             )
+
+
+class ReceiptDatePrefersItsOwnMonthTest(unittest.TestCase):
+    """An invoice lists several dates; only one identifies the receipt.
+
+    A Tokuten invoice shows its issue date, the usage period and the reading
+    dates. Without preferring the month the receipt belongs to, the earliest
+    unrelated date won and the file was dated the first of the month.
+    """
+
+    def test_issue_date_wins_over_an_earlier_usage_period(self) -> None:
+        from src.domain.document_metadata import extract_transaction_date
+
+        text = (
+            "請求書 発行日2026年7月18日 2026年6月ご利用分 "
+            "ご使用期間20260507〜20260602"
+        )
+
+        self.assertEqual(
+            "2026-07-18",
+            str(extract_transaction_date(text, prefer_month="2026-07")),
+        )
+        # Without the hint the earliest candidate still wins, as before.
+        self.assertEqual(
+            "2026-05-07",
+            str(extract_transaction_date(text)),
+        )
+
+    def test_unrelated_month_hint_does_not_discard_every_candidate(self) -> None:
+        from src.domain.document_metadata import extract_transaction_date
+
+        text = "発行日2026年7月18日"
+
+        self.assertEqual(
+            "2026-07-18",
+            str(extract_transaction_date(text, prefer_month="2030-01")),
+        )
+
+
+class OcrRepairsMisreadCharactersTest(unittest.TestCase):
+    """The OCR engine renders 円 as 月 and prefers simplified shapes."""
+
+    def test_comma_grouped_number_followed_by_month_is_yen(self) -> None:
+        from src.domain.document_metadata import _repair_ocr_text, extract_amount_yen
+
+        repaired = _repair_ocr_text("請求额合計（税达） 7,615月")
+
+        self.assertIn("7,615円", repaired)
+        self.assertIn("請求額合計", repaired)
+        self.assertEqual(7615, extract_amount_yen(repaired))
+
+    def test_a_real_month_is_left_alone(self) -> None:
+        from src.domain.document_metadata import _repair_ocr_text
+
+        self.assertEqual("2026年6月ご利用分", _repair_ocr_text("2026年6月ご利用分"))
