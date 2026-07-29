@@ -380,7 +380,12 @@ class CommufaAutoFetcher:
         metadata_texts: list[str] = []
         logs: list[str] = []
         action: dict[str, Any] = {}
-        for _ in range(12):
+        # This portal renders its dashboard after the navigation completes, so
+        # the first passes can legitimately see an empty shell. Give it time to
+        # paint before treating a missing entry point as a failure.
+        unrecognized_passes = 0
+        print_view_opened = False
+        for _ in range(20):
             action = self.browser.evaluate(build_commufa_step_expression(year, month), timeout=30) or {}
             logs.extend(str(line) for line in action.get("logs") or [])
             if action.get("metadataText"):
@@ -390,6 +395,13 @@ class CommufaAutoFetcher:
             if action.get("directUrl"):
                 self.browser.navigate(str(action["directUrl"]), wait_seconds=min(float(action.get("waitMs") or 2500) / 1000, 2.5))
                 continue
+            if action.get("code") == "CLICK_PRINT_PAGE":
+                # Opening the print view is the last navigation. Re-evaluating
+                # would still see the detail page behind it and open the print
+                # view again on every pass.
+                time.sleep(min(float(action.get("waitMs") or 2400) / 1000, 3.5))
+                print_view_opened = True
+                break
             if action.get("clickedInPage"):
                 # The page already activated the control; clicking the reported
                 # point again would trigger the navigation twice.
@@ -400,6 +412,10 @@ class CommufaAutoFetcher:
                 self.browser.click_at(int(click["x"]), int(click["y"]))
                 time.sleep(min(float(action.get("waitMs") or 1200) / 1000, 3.5))
                 continue
+            unrecognized_passes += 1
+            if unrecognized_passes <= 10:
+                time.sleep(2.0)
+                continue
             raise _action_error(action, "コミュファ明細の取得操作を進められませんでした。", "COMMUFA_ACTION_NOT_FOUND")
         else:
             raise AcquisitionError(
@@ -408,7 +424,7 @@ class CommufaAutoFetcher:
                 advice="取得用ブラウザで対象月の利用明細または印刷用ページが表示されているか確認してください。",
             )
 
-        if not action.get("ok"):
+        if not action.get("ok") and not print_view_opened:
             raise _action_error(action, "コミュファ明細の取得操作を進められませんでした。", "COMMUFA_ACTION_NOT_FOUND")
 
         time.sleep(0.6)
