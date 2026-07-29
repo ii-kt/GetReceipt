@@ -1192,9 +1192,15 @@ def render_monthly_view(
     # Electricity (Tokuten) is fetched through Microsoft Graph, not a browser,
     # so it needs a one-time Microsoft mail connection instead of a login page.
     graph_manager = graph_manager_from_secrets(st.secrets, storage)
-    tokuten_missing = any(service.id == "tokuten" for service in missing_services)
+    # The mail connection is needed both for the electricity invoice and to
+    # read a provider's login code. Offering it only for electricity left no
+    # way to connect when that was already saved and a code was still needed.
+    mail_dependent_missing = any(
+        service.id == "tokuten" or service.id in VERIFICATION_CODE_SOURCES
+        for service in missing_services
+    )
     graph_connected = False
-    if graph_manager is not None and tokuten_missing and not active_batch:
+    if graph_manager is not None and mail_dependent_missing and not active_batch:
         graph_connected = render_graph_connection(
             st, graph_manager, required=True
         )

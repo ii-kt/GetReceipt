@@ -73,7 +73,11 @@ def render_graph_connection(
         return False
 
     with st.container(border=True):
-        st.markdown("**電気（トクテン）の自動取得にはMicrosoftメール接続が必要です**")
+        st.markdown("**自動取得にはMicrosoftメール接続が必要です**")
+        st.caption(
+            "電気（トクテン）の請求PDFと、Wi-Fi（コミュファ）ログイン時の"
+            "確認コードを、このメールボックスから読み取ります。"
+        )
         st.caption(
             "ブラウザ操作ではなく、Microsoft公式のメールAPI（Mail.ReadWrite）で"
             "請求PDFと確認コードを読み取ります。書き込み権限は、使用済みの"
