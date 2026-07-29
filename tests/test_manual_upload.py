@@ -140,3 +140,61 @@ class ManualUploadTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ImageOnlyPdfIsNotMinedForNumbersTest(unittest.TestCase):
+    """An image-only invoice must not yield an invented amount.
+
+    A real electricity invoice with no text layer was saved as "29円" because
+    the extractor decoded the PDF's own bytes - object numbers, stream
+    lengths, transform matrices - and found a plausible figure there.
+    """
+
+    def _image_only_pdf(self) -> bytes:
+        # Mirrors the provider's real file: a single page whose content is one
+        # drawn image and no text operators at all.
+        objects = [
+            b"<</Type /Catalog /Pages 2 0 R>>",
+            b"<</Type /Pages /Kids [3 0 R] /Count 1>>",
+            b"<</Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
+            b"/Resources <</XObject <</I0 5 0 R>>>> /Contents 4 0 R>>",
+            b"<</Length 44>>\nstream\nq 595 0 0 842 0 0 cm /I0 Do Q\nendstream",
+            b"<</Type /XObject /Subtype /Image /Width 8 /Height 8 "
+            b"/ColorSpace /DeviceGray /BitsPerComponent 8 /Length 64>>\n"
+            b"stream\n" + b"\x80" * 64 + b"\nendstream",
+        ]
+        out = bytearray(b"%PDF-1.4\n")
+        offsets = []
+        for index, body in enumerate(objects, start=1):
+            offsets.append(len(out))
+            out += b"%d 0 obj\n" % index + body + b"\nendobj\n"
+        xref = len(out)
+        out += b"xref\n0 %d\n" % (len(objects) + 1)
+        out += b"0000000000 65535 f \n"
+        for offset in offsets:
+            out += b"%010d 00000 n \n" % offset
+        out += b"trailer\n<</Size %d /Root 1 0 R>>\nstartxref\n%d\n%%%%EOF\n" % (
+            len(objects) + 1,
+            xref,
+        )
+        return bytes(out)
+
+    def test_no_text_layer_yields_no_text(self) -> None:
+        from src.domain.document_metadata import extract_pdf_text
+
+        self.assertEqual("", extract_pdf_text(self._image_only_pdf()))
+
+    def test_no_amount_is_invented_from_the_file_structure(self) -> None:
+        from src.domain.document_metadata import extract_receipt_data
+
+        extracted = extract_receipt_data(self._image_only_pdf())
+
+        self.assertIsNone(extracted.amount_yen)
+
+    def test_manual_upload_refuses_rather_than_guessing(self) -> None:
+        with self.assertRaises(ManualUploadError):
+            inspect_manual_receipt(
+                service_id="tokuten",
+                target_month="2026-06",
+                content=self._image_only_pdf(),
+            )

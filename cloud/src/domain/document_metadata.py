@@ -18,22 +18,48 @@ def normalize_text(value: str) -> str:
 
 
 def extract_pdf_text(content: bytes) -> str:
+    """Return a PDF's real text layer, or nothing.
+
+    Decoding the raw bytes as a fallback used to be appended here. For a
+    scanned or image-only invoice that yields the file's internal structure
+    - object numbers, stream lengths, transform matrices - and the amount
+    extractor then mines a plausible-looking number out of it. A receipt was
+    saved with a fabricated amount that way, so an unreadable PDF must report
+    no text instead of inventing some.
+    """
+
+    if not content.startswith(b"%PDF"):
+        # Not a PDF: the caller may still be handing over plain page text.
+        return _decoded(content)
+
     parts: list[str] = []
-    if b"%%EOF" in content:
-        try:
-            from pypdf import PdfReader
+    try:
+        from pypdf import PdfReader
 
-            reader = PdfReader(BytesIO(content))
-            for page in reader.pages:
-                parts.append(page.extract_text() or "")
-        except Exception:
-            pass
+        reader = PdfReader(BytesIO(content))
+        for page in reader.pages:
+            parts.append(page.extract_text() or "")
+    except Exception:
+        # The file claims to be a PDF but cannot be parsed. Scanning its bytes
+        # is the only thing left and cannot be confused with a real document's
+        # internal structure, which is what produced fabricated amounts.
+        return _decoded(content)
+    return normalize_text(" ".join(part for part in parts if part))
 
+
+def _decoded(content: bytes) -> str:
+    """Best-effort text for content that is not a parseable PDF.
+
+    Each encoding recovers characters the others drop - a yen sign written in
+    cp932 disappears under utf-8 - so all of them contribute.
+    """
+
+    parts: list[str] = []
     for encoding in ("utf-8", "cp932", "latin1"):
         try:
             parts.append(content.decode(encoding, errors="ignore"))
         except Exception:
-            pass
+            continue
     return normalize_text(" ".join(part for part in parts if part))
 
 
