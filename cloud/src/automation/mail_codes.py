@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import quote
 
 import requests
 
@@ -67,6 +68,7 @@ class MailVerificationCodeReader:
     ) -> None:
         self._access_token_provider = access_token_provider
         self._session = session or requests.Session()
+        self._pending_fallback_id = ""
         self._now = now
         self._sleep = sleep
 
@@ -95,6 +97,9 @@ class MailVerificationCodeReader:
             # No new mail arrived, but this provider reissues the same code for
             # repeated attempts, so a recent message is still the live code.
             LOGGER.info("Using a recent verification mail; no newer one arrived")
+            if self._pending_fallback_id:
+                self._retire_message({"id": self._pending_fallback_id})
+                self._pending_fallback_id = ""
             return fallback
         raise MailCodeUnavailableError(
             "メールから確認コードを読み取れませんでした。"
@@ -121,10 +126,48 @@ class MailVerificationCodeReader:
             if not code:
                 continue
             if received >= threshold:
+                self._retire_message(message)
                 return code, newest_recent
             if not newest_recent and received >= cutoff:
                 newest_recent = code
+                self._pending_fallback_id = str(message.get("id") or "")
         return "", newest_recent
+
+    def _retire_message(self, message: dict[str, Any]) -> None:
+        """Mark a consumed code mail as read and move it out of the inbox.
+
+        This is best effort: it tells the owner at a glance which codes the
+        app has already used, and never blocks an acquisition. It needs a
+        read-write mail scope, so it is silently skipped without one.
+        """
+
+        message_id = str(message.get("id") or "")
+        if not message_id:
+            return
+        token = self._access_token_provider()
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+        }
+        path = f"{GRAPH_ROOT}/me/messages/{quote(message_id, safe='')}"
+        try:
+            self._session.patch(
+                path,
+                headers=headers,
+                json={"isRead": True},
+                timeout=20,
+            )
+            self._session.post(
+                f"{path}/move",
+                headers=headers,
+                json={"destinationId": "archive"},
+                timeout=20,
+            )
+        except requests.RequestException:
+            LOGGER.info("Could not file the used verification mail")
+        finally:
+            token = ""
+            headers = {}
 
     def _search(self, source: MailCodeSource) -> list[dict[str, Any]]:
         token = self._access_token_provider()
@@ -138,7 +181,7 @@ class MailVerificationCodeReader:
                 params={
                     "$search": f'"from:{source.sender_address}"',
                     "$top": "10",
-                    "$select": "subject,from,receivedDateTime,body",
+                    "$select": "id,subject,from,receivedDateTime,body",
                 },
                 timeout=30,
             )

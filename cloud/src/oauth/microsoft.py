@@ -22,7 +22,10 @@ MICROSOFT_SCOPES = (
     "openid",
     "profile",
     "offline_access",
-    "https://graph.microsoft.com/Mail.Read",
+    # ReadWrite is required only to file a consumed verification mail as read
+    # and archived, so the owner can tell which codes the app already used.
+    # Mail is never sent: Mail.Send is deliberately not requested.
+    "https://graph.microsoft.com/Mail.ReadWrite",
 )
 _CLIENT_ID = re.compile(r"^[A-Za-z0-9._-]{8,200}$")
 # PKCE verifiers and our own state use the unreserved set only.

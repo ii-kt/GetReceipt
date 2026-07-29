@@ -179,5 +179,78 @@ class MailVerificationCodeReaderTest(unittest.TestCase):
         self.assertGreater(session.requests, 1)
 
 
+
+class UsedCodeMailIsFiledTest(unittest.TestCase):
+    """A consumed code mail is marked read and archived.
+
+    Without this the inbox fills with codes and the owner cannot tell which
+    one the app is currently working with.
+    """
+
+    class _Session:
+        def __init__(self, messages):
+            self.messages = messages
+            self.patched: list[tuple[str, dict]] = []
+            self.moved: list[tuple[str, dict]] = []
+
+        def get(self, url, **kwargs):
+            return _FakeResponse({"value": self.messages})
+
+        def patch(self, url, **kwargs):
+            self.patched.append((url, kwargs.get("json") or {}))
+            return _FakeResponse({})
+
+        def post(self, url, **kwargs):
+            self.moved.append((url, kwargs.get("json") or {}))
+            return _FakeResponse({})
+
+    def _reader(self, messages):
+        session = self._Session(messages)
+        reader = MailVerificationCodeReader(
+            lambda: "delegated-access-token",
+            session=session,
+            now=lambda: NOW,
+            sleep=lambda _s: None,
+        )
+        return reader, session
+
+    def test_fresh_code_mail_is_marked_read_and_archived(self) -> None:
+        message = _message(code="155493", minutes_ago=1)
+        message["id"] = "AAMkAD-message-id"
+        reader, session = self._reader([message])
+
+        reader.wait_for_code(
+            SOURCE,
+            requested_after=NOW - timedelta(minutes=2),
+            timeout_seconds=0,
+        )
+
+        self.assertEqual(1, len(session.patched))
+        self.assertEqual({"isRead": True}, session.patched[0][1])
+        self.assertEqual(1, len(session.moved))
+        self.assertEqual({"destinationId": "archive"}, session.moved[0][1])
+        self.assertTrue(session.moved[0][0].endswith("/move"))
+
+    def test_filing_failure_never_breaks_the_acquisition(self) -> None:
+        import requests as requests_module
+
+        message = _message(code="155493", minutes_ago=1)
+        message["id"] = "AAMkAD-message-id"
+        reader, session = self._reader([message])
+
+        def boom(url, **kwargs):
+            raise requests_module.RequestException("no write scope")
+
+        session.patch = boom  # type: ignore[method-assign]
+
+        code = reader.wait_for_code(
+            SOURCE,
+            requested_after=NOW - timedelta(minutes=2),
+            timeout_seconds=0,
+        )
+
+        self.assertEqual("155493", code)
+
+
 if __name__ == "__main__":
     unittest.main()

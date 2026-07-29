@@ -662,10 +662,23 @@ _COMMUFA_CHALLENGE_PROBE = r"""(() => {
     return identified && sixDigitCompatible && numericCompatible;
   });
   const rejected = /コード[^。\n]{0,30}(正しく|誤|無効|期限|一致し)|入力[^。\n]{0,30}(やり直|確認)/.test(pageText);
-  if (candidates.length === 1 && location.protocol === "https:" && location.hostname === "mypage.commufa.jp") {
+  const onOfficialHost = location.protocol === "https:" && location.hostname === "mypage.commufa.jp";
+  if (candidates.length === 1 && onOfficialHost) {
     return { kind: "verification_code", codeRejected: rejected };
   }
-  const challengeWords = ["ワンタイム", "確認コード", "認証コード", "セキュリティコード", "本人確認", "追加認証", "秘密の質問"];
+  // The identity verification view is still the code step even when its field
+  // is momentarily absent mid-render. Reporting it as a different challenge
+  // ended the run right after a correct code was submitted.
+  const onVerificationView = onOfficialHost && (
+    location.pathname.toLowerCase().includes("/identity/verification")
+    || pageText.includes(normalize("id を検証"))
+    || pageText.includes(normalize("コードを再送信"))
+  );
+  if (onVerificationView) return { kind: "verification_code", codeRejected: rejected };
+  // Only words that cannot belong to the code flow may escalate: the code
+  // page itself mentions 確認コード and would otherwise self-report as another
+  // kind of challenge.
+  const challengeWords = ["本人確認", "追加認証", "秘密の質問"];
   if (challengeWords.some((word) => pageText.includes(normalize(word)))) return { kind: "other", codeRejected: false };
   return { kind: "", codeRejected: false };
 })()"""

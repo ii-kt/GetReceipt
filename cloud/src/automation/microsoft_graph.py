@@ -129,10 +129,18 @@ class TokutenGraphFetcher:
                         )
         finally:
             token = ""
+        # Distinguish "the invoice has not been issued yet" from "the mailbox
+        # cannot be read": pointing at the connection sends the owner to fix
+        # something that is not broken.
+        expected = expected_transaction_month("tokuten", target_month)
+        year, month = parse_month_key(expected)
         raise AcquisitionError(
-            "Microsoftメールで対象月のトクテンでんき添付PDFを確認できませんでした。",
+            f"トクテンでんきの{year}年{month}月分の請求メールがまだ見つかりません。",
             code="TOKUTEN_GRAPH_ATTACHMENT_NOT_FOUND",
-            advice="iPhoneからMicrosoftメールを再接続し、対象月の請求メールとPDF添付を確認してください。",
+            advice=(
+                f"この利用月の領収書は{year}年{month}月分の請求確定メールから取得します。"
+                "請求が確定して添付PDFが届いてから再実行してください。"
+            ),
         )
 
     def _message_matches(self, message: dict[str, Any], target_month: str) -> bool:

@@ -620,3 +620,29 @@ class VerificationPageIsNotLoggedInTest(unittest.TestCase):
                 }
             )
         )
+
+
+class VerificationViewIsNotAnotherChallengeTest(unittest.TestCase):
+    """The code page mentions 確認コード, so it must not self-report as other.
+
+    Classifying it as a different challenge ended the run immediately after a
+    correct code was submitted.
+    """
+
+    def _probe(self) -> str:
+        from src.automation import security_challenge as challenge_module
+
+        return challenge_module._COMMUFA_CHALLENGE_PROBE
+
+    def test_code_words_no_longer_escalate_to_other(self) -> None:
+        probe = self._probe()
+        escalation = probe.split("const challengeWords")[1].split("]")[0]
+        for word in ("確認コード", "認証コード", "ワンタイム", "セキュリティコード"):
+            self.assertNotIn(word, escalation)
+        for word in ("本人確認", "追加認証", "秘密の質問"):
+            self.assertIn(word, escalation)
+
+    def test_verification_view_is_recognised_without_its_field(self) -> None:
+        probe = self._probe()
+        self.assertIn("/identity/verification", probe)
+        self.assertIn("onVerificationView", probe)

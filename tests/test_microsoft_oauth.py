@@ -87,7 +87,10 @@ class MicrosoftOAuthTest(unittest.TestCase):
             query = parse_qs(parsed.query)
             self.assertEqual("S256", query["code_challenge_method"][0])
             self.assertNotIn("code_verifier", query)
-            self.assertIn("https://graph.microsoft.com/Mail.Read", query["scope"][0])
+            scopes = query["scope"][0].split()
+            self.assertIn("https://graph.microsoft.com/Mail.ReadWrite", scopes)
+            # Filing a used code mail needs write access; sending never does.
+            self.assertNotIn("https://graph.microsoft.com/Mail.Send", scopes)
 
             # The callback can land after a worker restart. Pending PKCE state is
             # encrypted in SQLite instead of relying on process memory.
