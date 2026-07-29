@@ -144,13 +144,15 @@ class MailVerificationCodeReader:
         message_id = str(message.get("id") or "")
         if not message_id:
             return
-        token = self._access_token_provider()
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-        }
-        path = f"{GRAPH_ROOT}/me/messages/{quote(message_id, safe='')}"
+        token = ""
+        headers: dict[str, str] = {}
         try:
+            token = self._access_token_provider()
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/json",
+            }
+            path = f"{GRAPH_ROOT}/me/messages/{quote(message_id, safe='')}"
             self._session.patch(
                 path,
                 headers=headers,
@@ -163,7 +165,9 @@ class MailVerificationCodeReader:
                 json={"destinationId": "archive"},
                 timeout=20,
             )
-        except requests.RequestException:
+        except Exception:
+            # Filing is a convenience. Nothing here may cost the owner the
+            # acquisition the code was read for.
             LOGGER.info("Could not file the used verification mail")
         finally:
             token = ""
