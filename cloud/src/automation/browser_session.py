@@ -489,8 +489,23 @@ class ManagedBrowser:
             timeout=timeout + 5,
         )
         if result.get("exceptionDetails"):
-            detail = result["exceptionDetails"].get("text", "JavaScript evaluation failed.")
-            raise BrowserAutomationError(detail)
+            details = result["exceptionDetails"]
+            # "text" is usually just "Uncaught"; the message and line live on
+            # the exception object, and without them a page-script fault is
+            # indistinguishable from any other.
+            exception = details.get("exception") or {}
+            described = str(
+                exception.get("description")
+                or exception.get("value")
+                or ""
+            ).splitlines()
+            detail = str(details.get("text") or "JavaScript evaluation failed.")
+            if described:
+                detail = f"{detail}: {described[0]}"
+            line = details.get("lineNumber")
+            if isinstance(line, int):
+                detail = f"{detail} (line {line + 1})"
+            raise BrowserAutomationError(detail[:300])
         remote = result.get("result", {})
         return remote.get("value")
 

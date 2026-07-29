@@ -47,12 +47,14 @@ _VIEWER_ALLOWED_HOSTS: dict[str, frozenset[str]] = {
         {
             "webbilling.ntt-finance.co.jp",
             "id.smt.docomo.ne.jp",
+            "cfg.smt.docomo.ne.jp",
         }
     ),
     "webbilling": frozenset(
         {
             "webbilling.ntt-finance.co.jp",
             "id.smt.docomo.ne.jp",
+            "cfg.smt.docomo.ne.jp",
         }
     ),
     "tokuten": frozenset(

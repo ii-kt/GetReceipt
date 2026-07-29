@@ -308,6 +308,11 @@ def _apply_auto_login_result(browser: ManagedBrowser, result: dict[str, Any], se
                 "続けて試行するとアカウントがロックされる可能性があるため停止しました。"
             ),
         )
+    if result.get("attempted") and result.get("directUrl"):
+        # Some login entries are links that cannot be clicked because their
+        # container is collapsed to zero size.
+        browser.navigate(str(result["directUrl"]), wait_seconds=2.0)
+        return True
     if result.get("attempted") and result.get("filled"):
         # Let the page commit the field values before the next pass submits.
         time.sleep(0.8)
@@ -827,6 +832,8 @@ class WebBillingAutoFetcher:
     def _wait_for_login(self, timeout_seconds: float = 120) -> None:
         deadline = time.time() + timeout_seconds
         last_state = "unknown"
+        last_reason = ""
+        summary: dict[str, Any] = {}
         while time.time() < deadline:
             summary = self.browser.page_summary()
             state = classify_configured_login_state(summary, self.config)
@@ -834,13 +841,20 @@ class WebBillingAutoFetcher:
             if state == "logged-in":
                 return
             auto_login = self.browser.evaluate(build_webbilling_auto_login_expression(self.credentials), timeout=15) or {}
+            last_reason = str(
+                auto_login.get("reason") or auto_login.get("code") or ""
+            )
             if self._apply_login_result(auto_login):
                 continue
             time.sleep(1.0)
         raise AcquisitionError(
             "Webビリングのログイン完了を検知できませんでした。",
             code="LOGIN_REQUIRED" if last_state == "login-required" else "LOGIN_TIMEOUT",
-            advice="取得用ブラウザでWebビリングまたはdアカウントの認証を完了してから、もう一度取得してください。",
+            advice=_login_timeout_advice(
+                summary,
+                state=last_state,
+                reason=last_reason,
+            ),
         )
 
     def _wait_for_login_after_security_code(self, timeout_seconds: float = 90) -> None:
@@ -1475,6 +1489,15 @@ def build_webbilling_auto_login_expression(credentials: dict[str, str]) -> str:
                 or ""
             ),
             "password": credentials.get("password") or "",
+            # The portal offers its own Web billing ID form and a d-account
+            # button on the same page. Which one is correct depends on which
+            # identity the owner registered, so carry that decision here
+            # rather than guessing from the page.
+            "prefersDAccount": bool(
+                credentials.get("dAccountId")
+                or credentials.get("d_account_id")
+                or "@" in str(credentials.get("login_id") or credentials.get("id") or "")
+            ),
         },
         r"""
 const normalize = (value) => String(value || "").normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
@@ -1529,12 +1552,27 @@ const codeInputs = [...document.querySelectorAll("input")]
   .filter(visible)
   .filter((input) => ["text", "tel", "number", "password"].includes(String(input.type || "text").toLowerCase()))
   .filter((input) => codeHints.some((word) => normalize(labelOf(input) + " " + contextOf(input, 4)).includes(normalize(word))));
-const exactSecurityOrigin = location.protocol === "https:" && ["webbilling.ntt-finance.co.jp", "id.smt.docomo.ne.jp"].includes(location.hostname);
+const exactSecurityOrigin = location.protocol === "https:" && ["webbilling.ntt-finance.co.jp", "id.smt.docomo.ne.jp", "cfg.smt.docomo.ne.jp"].includes(location.hostname);
 if (codeInputs.length === 1 && exactSecurityOrigin) return { attempted: false, waitingForSecurityCode: true, code: "WAIT_SECURITY_CODE", challengeKind: "verification_code", reason: "セキュリティコード入力待ちです。" };
 if (securityWords.some((word) => pageText.includes(normalize(word)))) return { attempted: false, code: "SECURITY_CHALLENGE", challengeKind: "interactive", reason: "コード入力以外の追加認証が表示されています。" };
 const passwordInput = [...document.querySelectorAll("input[type='password']")].find(visible);
+// The portal shows its own ID/password form and a d-account entry on the
+// same page, and that entry is a zero-sized link inside a collapsed block,
+// so it can be neither seen nor clicked. Go to its destination directly.
+const dAccountEntry = [...document.querySelectorAll("a[href]")]
+  .map((el) => String(el.getAttribute("href") || ""))
+  .find((href) => /a0105|logindcm/i.test(href));
+if (payload.prefersDAccount && dAccountEntry && location.hostname === "webbilling.ntt-finance.co.jp" && !/a0105|logindcm/i.test(location.pathname)) {
+  return { attempted: true, code: "OPEN_D_ACCOUNT_LOGIN", directUrl: new URL(dAccountEntry, location.href).href, reason: "dアカウントのログイン画面へ移動します。" };
+}
 const dAccountLogin = bestControl(["dアカウントログイン", "dアカウントでログイン", "dアカウント", "d account"], ["新規", "作成", "登録", "お忘れ", "戻る", "キャンセル"]);
-if (dAccountLogin && !passwordInput) return { attempted: true, code: "CLICK_D_ACCOUNT_LOGIN", click: pointOf(dAccountLogin.el) };
+// The Web billing top page shows its own ID/password form next to the
+// d-account button. Typing a d-account address into that form can never
+// succeed, so take the d-account route whenever that is the owner's identity.
+const onDAccountHost = /(^|\.)smt\.docomo\.ne\.jp$/.test(location.hostname);
+if (dAccountLogin && (payload.prefersDAccount || !passwordInput) && !onDAccountHost) {
+  return { attempted: true, code: "CLICK_D_ACCOUNT_LOGIN", click: pointOf(dAccountLogin.el) };
+}
 if (passwordInput) {
   if (!payload.password && !String(passwordInput.value || "").trim()) return { attempted: false, code: "PASSWORD_NOT_CONFIGURED", reason: "パスワードが未入力です。" };
   if (payload.password) setValue(passwordInput, payload.password);
