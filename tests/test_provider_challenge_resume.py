@@ -212,3 +212,32 @@ class SecurityCodeGateTest(unittest.TestCase):
                 }
             )
         )
+
+
+class CommufaVerificationViewIsCodeStepTest(unittest.TestCase):
+    """The login script must route the code page into the code flow.
+
+    Commufa's published login second factor is the emailed code; its SMS step
+    belongs to initial ID registration. The code page's own text says
+    確認コード, so matching that as a different challenge stopped the run on
+    the one page the app can complete by itself.
+    """
+
+    def _script(self) -> str:
+        from src.automation.official_sites import (
+            build_configured_auto_login_expression,
+        )
+
+        return build_configured_auto_login_expression(
+            {"login_id": "owner@example.com", "password": "pw"}
+        )
+
+    def test_verification_view_is_reported_as_a_code_step(self) -> None:
+        script = self._script()
+        self.assertIn("/identity/verification", script)
+        self.assertIn('challengeKind: "verification_code", reason: "確認コード入力画面です。"', script)
+
+    def test_no_guessed_challenge_wording_remains(self) -> None:
+        script = self._script()
+        self.assertNotIn("securityWords", script)
+        self.assertNotIn("秘密の質問", script)

@@ -1126,8 +1126,19 @@ const otpInputs = [...document.querySelectorAll("input")].filter(visible).filter
 if (otpInputs.length === 1 && location.protocol === "https:" && location.hostname === "mypage.commufa.jp") {
   return { attempted: false, code: "SECURITY_CHALLENGE", waitingForSecurityCode: true, challengeKind: "verification_code", reason: "確認コード入力待ちです。" };
 }
-const securityWords = ["ワンタイム", "認証コード", "確認コード", "セキュリティコード", "本人確認", "秘密の質問", "追加認証"];
-if (securityWords.some((word) => pageText.includes(normalize(word)))) return { attempted: false, code: "SECURITY_CHALLENGE", challengeKind: "interactive", reason: "追加認証が表示されています。" };
+// The identity verification view is the emailed-code step, which this app
+// completes automatically. Its own text says 確認コード, so matching that word
+// as a different challenge stopped the run on the very page it can handle.
+// Commufa's published login second factor is that code (its SMS step belongs
+// to initial ID registration), so no other wording is treated as a challenge
+// here; a CAPTCHA is still detected from the DOM above.
+if (location.hostname === "mypage.commufa.jp" && (
+  location.pathname.toLowerCase().includes("/identity/verification")
+  || pageText.includes(normalize("id を検証"))
+  || pageText.includes(normalize("コードを再送信"))
+)) {
+  return { attempted: false, code: "SECURITY_CHALLENGE", waitingForSecurityCode: true, challengeKind: "verification_code", reason: "確認コード入力画面です。" };
+}
 const passwordInput = [...document.querySelectorAll("input[type='password']")].find(visible);
 const textInputs = [...document.querySelectorAll("input, textarea")]
   .filter(visible)
