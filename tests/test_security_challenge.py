@@ -652,3 +652,50 @@ class VerificationViewIsNotAnotherChallengeTest(unittest.TestCase):
         probe = self._probe()
         self.assertIn("/identity/verification", probe)
         self.assertIn("onVerificationView", probe)
+
+
+class CommufaCodeFieldWaitTest(unittest.TestCase):
+    """The code field can render after its page URL settles."""
+
+    class _Browser:
+        def __init__(self, misses: int) -> None:
+            self.misses = misses
+            self.calls = 0
+
+        def current_page_target(self):
+            return {"url": "https://mypage.commufa.jp/join/_ui/identity/verification/x"}
+
+        def evaluate_current_page(self, expression, timeout=10):
+            if "securityCode" in expression:
+                self.calls += 1
+                if self.calls <= self.misses:
+                    return {"ok": False, "error": "FIELD_NOT_FOUND"}
+                return {"ok": True, "filled": True}
+            return {"ok": True}
+
+    def test_waits_for_a_late_rendering_field(self) -> None:
+        from src.automation import security_challenge as challenge_module
+
+        browser = self._Browser(misses=2)
+        with patch.object(challenge_module.time, "sleep"):
+            challenge_module.submit_commufa_security_code(browser, "123456")
+
+        self.assertEqual(3, browser.calls)
+
+    def test_gives_up_when_the_field_never_appears(self) -> None:
+        from src.automation import security_challenge as challenge_module
+
+        browser = self._Browser(misses=10_000)
+        clock = [0.0]
+        with (
+            patch.object(challenge_module.time, "sleep"),
+            patch.object(
+                challenge_module.time,
+                "monotonic",
+                side_effect=lambda: clock.__setitem__(0, clock[0] + 5) or clock[0],
+            ),
+        ):
+            with self.assertRaises(
+                challenge_module.SecurityChallengeSubmissionError
+            ):
+                challenge_module.submit_commufa_security_code(browser, "123456")

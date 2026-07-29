@@ -568,7 +568,17 @@ def submit_commufa_security_code(browser: ManagedBrowser, code: str) -> None:
         _json_string(safe_code),
     )
     try:
-        result = browser.evaluate_current_page(expression, timeout=10) or {}
+        # The verification view is recognised from its URL, which can settle
+        # before the field itself renders. Wait for the field rather than
+        # reporting it missing on the first look.
+        deadline = time.monotonic() + 20
+        while True:
+            result = browser.evaluate_current_page(expression, timeout=10) or {}
+            if result.get("error") != "FIELD_NOT_FOUND":
+                break
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(1.0)
         if result.get("filled"):
             # The page commits the entered value on its own render cycle;
             # submitting in the same tick sends an empty code.
