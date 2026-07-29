@@ -241,3 +241,41 @@ class CommufaVerificationViewIsCodeStepTest(unittest.TestCase):
         script = self._script()
         self.assertNotIn("securityWords", script)
         self.assertNotIn("秘密の質問", script)
+
+
+class UnissuedMonthIsNotAFaultTest(unittest.TestCase):
+    """A month the provider has not billed yet is not a failure to chase."""
+
+    def _error(self, months, *, year, month):
+        from src.automation.official_sites import _unissued_month_error
+
+        return _unissued_month_error(
+            {"code": "YEAR_MONTH_NOT_AVAILABLE", "availableMonths": months},
+            year=year,
+            month=month,
+        )
+
+    def test_month_after_the_newest_issued_one_says_so(self) -> None:
+        error = self._error(
+            ["2026/06", "2026/05", "2026/04"], year=2026, month=7
+        )
+
+        self.assertEqual("COMMUFA_MONTH_NOT_ISSUED", error.code)
+        self.assertIn("2026年7月分", str(error))
+        self.assertIn("2026年6月分", error.advice)
+
+    def test_a_gap_in_the_middle_is_still_reported_as_missing(self) -> None:
+        error = self._error(
+            ["2026/06", "2026/04"], year=2026, month=5
+        )
+
+        self.assertEqual("YEAR_MONTH_NOT_AVAILABLE", error.code)
+
+    def test_page_timestamp_cannot_pose_as_a_billed_month(self) -> None:
+        from src.automation.official_sites import build_commufa_step_expression
+
+        script = build_commufa_step_expression(2026, 7)
+
+        # The list header prints "照会日時：2026年07月29日", which must not be
+        # collected as an available month.
+        self.assertIn(r"月(?!\s*\d{1,2}\s*日)", script)

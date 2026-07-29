@@ -88,6 +88,40 @@ def _normalize(value: str) -> str:
     return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", str(value or ""))).strip().lower()
 
 
+def _unissued_month_error(
+    action: dict[str, Any],
+    *,
+    year: int,
+    month: int,
+) -> AcquisitionError:
+    """Say plainly when the provider has not billed this month yet.
+
+    The portal lists only months it has issued. Asking for a later one is not
+    a fault to investigate - it simply has not happened.
+    """
+
+    months: list[tuple[int, int]] = []
+    for value in action.get("availableMonths") or ():
+        parsed = re.fullmatch(r"(20\d{2})/(\d{1,2})", str(value).strip())
+        if parsed:
+            months.append((int(parsed.group(1)), int(parsed.group(2))))
+    newest = max(months, default=None)
+    if newest is not None and (year, month) > newest:
+        return AcquisitionError(
+            f"コミュファに{year}年{month}月分の利用明細がまだ掲載されていません。",
+            code="COMMUFA_MONTH_NOT_ISSUED",
+            advice=(
+                f"掲載済みの最新は{newest[0]}年{newest[1]}月分です。"
+                "請求が確定してから再実行してください。"
+            ),
+        )
+    return _action_error(
+        action,
+        f"コミュファで{year}年{month}月分の利用明細を見つけられませんでした。",
+        "YEAR_MONTH_NOT_AVAILABLE",
+    )
+
+
 def _login_timeout_advice(
     summary: dict[str, Any],
     *,
@@ -417,6 +451,8 @@ class CommufaAutoFetcher:
                 self.browser.click_at(int(click["x"]), int(click["y"]))
                 time.sleep(min(float(action.get("waitMs") or 1200) / 1000, 3.5))
                 continue
+            if action.get("code") == "YEAR_MONTH_NOT_AVAILABLE":
+                raise _unissued_month_error(action, year=year, month=month)
             unrecognized_passes += 1
             if unrecognized_passes <= 10:
                 time.sleep(2.0)
@@ -1015,7 +1051,9 @@ const bestControl = (keywords, excludes = []) => controls()
 const collectMonths = () => {
   const values = new Set();
   for (const el of [...document.querySelectorAll("tr, option, li, div")].filter(visible)) {
-    const match = labelOf(el).replace(/\s+/g, " ").match(/(20\d{2})\s*年\s*(\d{1,2})\s*月/);
+    // Skip a timestamp such as "2026年07月29日": it is the page's own clock,
+    // not a billed month, and it made an unissued month look available.
+    const match = labelOf(el).replace(/\s+/g, " ").match(/(20\d{2})\s*年\s*(\d{1,2})\s*月(?!\s*\d{1,2}\s*日)/);
     if (match) values.add(match[1] + "/" + String(Number(match[2])).padStart(2, "0"));
   }
   return [...values].slice(0, 40);
