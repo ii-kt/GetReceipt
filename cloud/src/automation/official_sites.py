@@ -7,6 +7,7 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from .auth_challenges import (
     AuthChallengeClassification,
@@ -870,8 +871,17 @@ class WebBillingAutoFetcher:
         last_state = "unknown"
         last_reason = ""
         summary: dict[str, Any] = {}
+        # The d-account sign-in happens on another host and can bounce back
+        # here, so the final page never shows why it was refused.
+        offsite_summary: dict[str, Any] = {}
+        trail: list[str] = []
         while time.time() < deadline:
             summary = self.browser.page_summary()
+            host = urlsplit(str(summary.get("url") or "")).hostname or ""
+            if host and (not trail or trail[-1] != host):
+                trail.append(host)
+            if host.endswith("smt.docomo.ne.jp"):
+                offsite_summary = summary
             state = classify_configured_login_state(summary, self.config)
             last_state = state
             if state == "logged-in":
@@ -887,9 +897,13 @@ class WebBillingAutoFetcher:
             "Webビリングのログイン完了を検知できませんでした。",
             code="LOGIN_REQUIRED" if last_state == "login-required" else "LOGIN_TIMEOUT",
             advice=_login_timeout_advice(
-                summary,
+                offsite_summary or summary,
                 state=last_state,
-                reason=last_reason,
+                reason=(
+                    f"{last_reason} / 経路: {' → '.join(trail[:6])}"
+                    if trail
+                    else last_reason
+                ),
             ),
         )
 

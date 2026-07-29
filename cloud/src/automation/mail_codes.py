@@ -41,6 +41,15 @@ VERIFICATION_CODE_SOURCES: dict[str, MailCodeSource] = {
         subject_hint="ID を確認してください",
         code_pattern=r"確認コード[\s:：]*([0-9]{6})",
     ),
+    # d-account sends its verification code to SMS or to the contact mail
+    # address, whichever the owner selected. Only the mail route is readable
+    # here; with SMS selected this simply finds nothing and the owner is asked
+    # for the code instead.
+    "mobile": MailCodeSource(
+        sender_address="cfg.smt.docomo.ne.jp",
+        subject_hint="",
+        code_pattern=r"セキュリティコード[^0-9]{0,12}([0-9]{4,8})",
+    ),
 }
 
 

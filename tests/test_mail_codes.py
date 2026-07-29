@@ -254,3 +254,59 @@ class UsedCodeMailIsFiledTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SplitCodeBoxesTest(unittest.TestCase):
+    """d-account splits its code across one input per digit.
+
+    Those boxes carry no label, so the labelled-field search never saw them
+    and the step was reported as something only a human could complete.
+    """
+
+    def _script(self) -> str:
+        from src.automation.auth_challenges import (
+            _submission_expression,
+            profile_for,
+        )
+
+        return _submission_expression(profile_for("webbilling"), "123456")
+
+    def test_submission_fills_one_digit_per_box(self) -> None:
+        script = self._script()
+
+        self.assertIn("splitCodeBoxes", script)
+        self.assertIn("value.charAt(index)", script)
+
+    def test_docomo_verification_host_is_allowed(self) -> None:
+        from src.automation.auth_challenges import profile_for
+
+        self.assertIn("cfg.smt.docomo.ne.jp", profile_for("webbilling").allowed_hosts)
+
+    def test_split_count_must_match_the_code_length(self) -> None:
+        from src.automation.auth_challenges import (
+            AuthChallengeClassification,
+            AuthChallengeObservation,
+        )
+
+        observation = AuthChallengeObservation(
+            service_id="webbilling",
+            classification=AuthChallengeClassification.CODE_INPUT,
+            input_candidates=6,
+            submit_candidates=1,
+            split_candidates=6,
+        )
+
+        self.assertEqual(6, observation.split_candidates)
+
+
+class DAccountMailCodeSourceTest(unittest.TestCase):
+    def test_security_code_wording_is_recognised(self) -> None:
+        import re as _re
+
+        source = VERIFICATION_CODE_SOURCES["mobile"]
+        body = "[セキュリティコード] 660763 [有効期限] 07/29 23:12"
+
+        match = _re.search(source.code_pattern, body)
+
+        self.assertIsNotNone(match)
+        self.assertEqual("660763", match.group(1))

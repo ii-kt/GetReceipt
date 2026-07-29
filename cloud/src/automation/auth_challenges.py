@@ -53,6 +53,9 @@ class AuthChallengeObservation:
     classification: AuthChallengeClassification
     input_candidates: int = 0
     submit_candidates: int = 0
+    # Providers that split the code across one box per digit report the count
+    # here; a single labelled field leaves it at zero.
+    split_candidates: int = 0
 
 
 @dataclass(frozen=True)
@@ -126,6 +129,8 @@ SERVICE_PROFILES: dict[str, AuthChallengeProfile] = {
         allowed_hosts=(
             "webbilling.ntt-finance.co.jp",
             "id.smt.docomo.ne.jp",
+            # The d-account sign-in and its verification step are served here.
+            "cfg.smt.docomo.ne.jp",
         ),
         min_length=4,
         max_length=8,
@@ -221,7 +226,13 @@ def submit_current_auth_code(
             "パスキー認証はこの自動入力境界では処理できません。",
             classification=AuthChallengeClassification.UNSUPPORTED,
         )
-    if observation.input_candidates != 1:
+    if observation.split_candidates:
+        # One box per digit: the count must match the code exactly.
+        if observation.split_candidates != len(safe_code):
+            raise AuthChallengeSubmissionError(
+                "追加認証コードの入力欄の数がコードの桁数と一致しません。"
+            )
+    elif observation.input_candidates != 1:
         raise AuthChallengeSubmissionError(
             "追加認証コードの入力欄を一意に確認できませんでした。"
         )
@@ -363,6 +374,7 @@ def _observation_from_probe(
         classification=classification,
         input_candidates=input_count,
         submit_candidates=submit_count,
+        split_candidates=_safe_count(result.get("splitCount")),
     )
 
 
@@ -420,18 +432,30 @@ const before = inspect();
 if (before.classification === "interactive" || before.classification === "unsupported") {{
   return {{ ok: false, classification: before.classification }};
 }}
-if (before.inputCount !== 1) return {{ ok: false, error: "INPUT_AMBIGUOUS" }};
 if (before.submitCount !== 1) return {{ ok: false, error: "SUBMIT_AMBIGUOUS" }};
 const inputs = codeInputs();
 const submits = submitControls();
-if (inputs.length !== 1) return {{ ok: false, error: "INPUT_AMBIGUOUS" }};
+const boxes = splitCodeBoxes();
 if (submits.length !== 1) return {{ ok: false, error: "SUBMIT_AMBIGUOUS" }};
 const value = {payload};
-const input = inputs[0];
 const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
-setter.call(input, value);
-input.dispatchEvent(new Event("input", {{ bubbles: true }}));
-input.dispatchEvent(new Event("change", {{ bubbles: true }}));
+const fill = (element, text) => {{
+  element.focus();
+  setter.call(element, text);
+  element.dispatchEvent(new Event("input", {{ bubbles: true }}));
+  element.dispatchEvent(new Event("change", {{ bubbles: true }}));
+}};
+if (boxes.length) {{
+  // One box per digit: the provider advances focus itself, so each box gets
+  // exactly its own character.
+  if (boxes.length !== value.length) return {{ ok: false, error: "INPUT_AMBIGUOUS" }};
+  boxes.forEach((box, index) => fill(box, value.charAt(index)));
+  boxes[boxes.length - 1].dispatchEvent(new Event("blur", {{ bubbles: true }}));
+}} else {{
+  if (before.inputCount !== 1) return {{ ok: false, error: "INPUT_AMBIGUOUS" }};
+  if (inputs.length !== 1) return {{ ok: false, error: "INPUT_AMBIGUOUS" }};
+  fill(inputs[0], value);
+}}
 submits[0].click();
 return {{ ok: true, classification: "code_input" }};
 }})()"""
@@ -482,12 +506,26 @@ const originAllowed = () => (
   location.port !== "" && location.port !== "443" ? false :
   location.protocol === "https:" && profile.hosts.includes(location.hostname.toLowerCase())
 );
-const codeInputs = () => [...document.querySelectorAll("input")]
+const typedInputs = () => [...document.querySelectorAll("input")]
   .filter(visible)
   .filter((input) => ["text", "tel", "number", "password"].includes(
     (input.getAttribute("type") || "text").toLowerCase()
-  ))
-  .filter((input) => hasHint(labelText(input), profile.inputHints));
+  ));
+// Some providers split the code across one box per digit. Those boxes carry
+// no label, so the hint match below never sees them and the whole step looked
+// like something only a human could complete.
+const splitCodeBoxes = () => {
+  const boxes = typedInputs().filter((input) => {
+    const max = Number(input.getAttribute("maxlength") || 0);
+    return max === 1 || (max === 0 && String(input.className || "").toLowerCase().includes("digit"));
+  });
+  return boxes.length >= profile.minLength && boxes.length <= profile.maxLength ? boxes : [];
+};
+const codeInputs = () => {
+  const boxes = splitCodeBoxes();
+  if (boxes.length) return boxes;
+  return typedInputs().filter((input) => hasHint(labelText(input), profile.inputHints));
+};
 const submitControls = () => [...document.querySelectorAll(
   "button, input[type='submit'], input[type='button'], [role='button']"
 )]
@@ -504,9 +542,11 @@ const inspect = () => {
   if (!originAllowed()) return { classification: "none", inputCount: 0, submitCount: 0, error: "ORIGIN_MISMATCH" };
   if (captchaPresent()) return { classification: "interactive", inputCount: 0, submitCount: 0 };
   if (passkeyPresent()) return { classification: "unsupported", inputCount: 0, submitCount: 0 };
+  const boxes = splitCodeBoxes();
   return {
     classification: "code_input",
     inputCount: codeInputs().length,
+    splitCount: boxes.length,
     submitCount: submitControls().length
   };
 };
