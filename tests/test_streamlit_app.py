@@ -563,6 +563,100 @@ class StreamlitAppTest(unittest.TestCase):
         self.assertGreater(len(attempted), 1)
         self.assertEqual([], list(app.exception))
 
+    def test_a_puzzle_holds_the_browser_open_instead_of_ending_the_job(self) -> None:
+        """Epos guards its sign-in with a slide puzzle.
+
+        The app must not answer it, but it must not throw the acquisition away
+        either: the same Chrome is held open and mirrored so the owner can work
+        the control, and everything after it stays automatic.
+        """
+
+        files = [
+            receipt_file("20260812", "中部テレコミュニケーション株式会社", 10002),
+            receipt_file("20260812", "フラットエナジー株式会社", 10003),
+            receipt_file("20260709", "NTTファイナンス株式会社", 10004),
+        ]
+        storage = FakeDriveStorage(files)
+        registry = FakeBrowserLeaseRegistry()
+        browser = MagicMock()
+        browser.current_page_target.return_value = {
+            "url": "https://www.eposcard.co.jp/memberservice/pc/nocardusedetail/login_dispatch.do"
+        }
+        resumed: list[str] = []
+
+        class PuzzleFetcher:
+            """No resume_after_security_code: a puzzle has no code to send."""
+
+            def resume_after_interactive_challenge(self, target_month):
+                resumed.append(target_month)
+                return object()
+
+        calls = 0
+
+        def acquire(**kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return SimpleNamespace(
+                    success=False,
+                    action_required=True,
+                    challenge=SimpleNamespace(
+                        kind="captcha",
+                        message="画像認証（パズル）が表示されました。",
+                    ),
+                    failure=None,
+                )
+            kwargs["fetch_statement"](kwargs["target_month"])
+            transaction_month = expected_transaction_month("epos", kwargs["target_month"])
+            file = receipt_file(
+                f"{transaction_month.replace('-', '')}05",
+                service_by_id("epos").default_partner,
+                87560,
+            )
+            storage.files.append(file)
+            return SimpleNamespace(
+                success=True, action_required=False, failure=None, file_name=file["name"]
+            )
+
+        app = self.app()
+        with (
+            patch.object(DriveStorage, "from_secrets", return_value=storage),
+            patch("src.automation.browser_session.ManagedBrowser", return_value=browser),
+            patch(
+                "src.automation.providers.build_receipt_fetcher",
+                return_value=PuzzleFetcher(),
+            ),
+            patch("src.workflows.auto_acquisition.run_auto_acquisition", side_effect=acquire),
+            patch("src.automation.security_challenge.browser_lease_registry", registry),
+            patch("src.ui.live_view.render_live_view") as live_view,
+        ):
+            app.run(timeout=20)
+            next(b for b in app.button if "自動取得" in b.label).click().run(timeout=20)
+
+            # The live page is mirrored, and no code box is offered.
+            live_view.assert_called()
+            self.assertEqual([], [item.label for item in app.text_input])
+            self.assertEqual(
+                "awaiting_security_code",
+                app.session_state["getreceipt_batch"]["phase"],
+            )
+            browser.close.assert_not_called()
+            self.assertEqual(
+                ("www.eposcard.co.jp",),
+                live_view.call_args.kwargs["allowed_hosts"],
+            )
+
+            resume_button = next(
+                b for b in app.button if b.label == "操作が終わったので自動取得を続ける"
+            )
+            resume_button.click().run(timeout=20)
+
+        self.assertEqual(["2026-07"], resumed)
+        self.assertEqual(registry.discard_calls, [registry.token])
+        self.assertEqual([], list(app.exception))
+        markdown = "\n".join(item.value for item in app.markdown)
+        self.assertIn("4件すべてのPDFをGoogle Driveで確認しました", markdown)
+
     def test_a_month_the_provider_has_not_billed_is_not_shown_as_a_failure(self) -> None:
         """Wi-Fi and electricity bill the month after use.
 

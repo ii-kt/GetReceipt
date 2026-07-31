@@ -600,6 +600,65 @@ class ManagedBrowser:
                 session_id=session_id,
             )
 
+    def drag_current_page(
+        self,
+        start_x: int,
+        start_y: int,
+        end_x: int,
+        end_y: int,
+        *,
+        steps: int = 24,
+    ) -> None:
+        """Press, move across, and release: the gesture a slider control needs.
+
+        A single click cannot work a drag control, so the owner's two taps in
+        the live view are replayed here as one continuous movement.
+        """
+
+        session_id = self._current_session_id()
+        self._drag_in_session(
+            session_id, start_x, start_y, end_x, end_y, steps=max(2, int(steps))
+        )
+
+    def _drag_in_session(
+        self,
+        session_id: str,
+        start_x: int,
+        start_y: int,
+        end_x: int,
+        end_y: int,
+        *,
+        steps: int,
+    ) -> None:
+        assert self.connection is not None
+
+        def dispatch(event_type: str, x: int, y: int, button: str) -> None:
+            self.connection.send(
+                "Input.dispatchMouseEvent",
+                {
+                    "type": event_type,
+                    "x": int(x),
+                    "y": int(y),
+                    "button": button,
+                    "buttons": 1 if button == "left" else 0,
+                    "clickCount": 1 if event_type != "mouseMoved" else 0,
+                },
+                session_id=session_id,
+            )
+
+        dispatch("mouseMoved", start_x, start_y, "none")
+        dispatch("mousePressed", start_x, start_y, "left")
+        for step in range(1, steps + 1):
+            ratio = step / steps
+            dispatch(
+                "mouseMoved",
+                round(start_x + (end_x - start_x) * ratio),
+                round(start_y + (end_y - start_y) * ratio),
+                "left",
+            )
+            time.sleep(0.012)
+        dispatch("mouseReleased", end_x, end_y, "left")
+
     def insert_text(self, text: str) -> None:
         session_id = self.ensure_page()
         self._insert_text_in_session(session_id, text)

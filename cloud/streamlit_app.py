@@ -42,6 +42,7 @@ from src.storage.drive_storage import DriveStorage
 from src.ui import remote_jobs
 from src.ui.access_control import require_owner_access
 from src.ui.graph_link import graph_manager_from_secrets, render_graph_connection
+from src.ui import live_view
 from src.ui.manual_upload import render_manual_upload
 from src.ui import styles as ui_styles
 from src.ui.module_contract import ensure_ui_module
@@ -76,6 +77,9 @@ NOT_ISSUED_FAILURE_CODES = frozenset(
     }
 )
 SECURITY_CHALLENGE_KEY = "getreceipt_security_challenge"
+# Gates the owner has to work by hand on the provider's own page, because no
+# code can express them. The browser is held open and mirrored instead.
+INTERACTIVE_CHALLENGE_KINDS = frozenset({"captcha", "interactive"})
 SECURITY_WAITING_PHASE = "awaiting_security_code"
 SECURITY_SUBMITTING_PHASE = "submitting_security_code"
 LOGGER = logging.getLogger(__name__)
@@ -689,9 +693,15 @@ def execute_next_service(storage: DriveStorage, batch: dict[str, Any]) -> None:
             if resumed is not None:
                 result = resumed
         if getattr(result, "action_required", False):
-            if not callable(getattr(fetcher, "resume_after_security_code", None)):
-                raise RuntimeError("この請求元は確認コードによる安全な再開に対応していません。")
             challenge = getattr(result, "challenge", None)
+            challenge_kind = str(getattr(challenge, "kind", "verification_code"))
+            resume_attribute = (
+                "resume_after_interactive_challenge"
+                if challenge_kind in INTERACTIVE_CHALLENGE_KINDS
+                else "resume_after_security_code"
+            )
+            if not callable(getattr(fetcher, resume_attribute, None)):
+                raise RuntimeError("この請求元は安全な再開に対応していません。")
             profile_id = "webbilling" if service_id == "mobile" else service_id
             profile = profile_for(profile_id)
             input_label = {
@@ -709,8 +719,9 @@ def execute_next_service(storage: DriveStorage, batch: dict[str, Any]) -> None:
                 "token": ticket.token,
                 "service_id": service_id,
                 "target_month": target_month,
-                "kind": str(getattr(challenge, "kind", "verification_code")),
+                "kind": challenge_kind,
                 "message": str(getattr(challenge, "message", "確認コードの入力が必要です。")),
+                "allowed_hosts": tuple(profile.allowed_hosts),
                 "expires_at": ticket.expires_at,
                 "input_label": input_label,
                 "min_length": profile.min_length,
@@ -796,12 +807,15 @@ def resume_security_code(
     token = str(challenge.get("token") or "")
     service_id = str(challenge.get("service_id") or "")
     target_month = str(challenge.get("target_month") or "")
+    interactive = str(challenge.get("kind") or "") in INTERACTIVE_CHALLENGE_KINDS
     service = service_by_id(service_id)
     result = None
     unexpected_error = ""
     resume_detail = ""
     status_box = st.status(
-        f"{service.label}へ確認コードを送信し、自動取得を再開しています。",
+        f"{service.label}の自動取得を再開しています。"
+        if interactive
+        else f"{service.label}へ確認コードを送信し、自動取得を再開しています。",
         expanded=True,
     )
 
@@ -813,16 +827,23 @@ def resume_security_code(
         ) as lease:
             credentials = service_credentials(st.secrets, service_id)
             fetcher = build_receipt_fetcher(service_id, lease.browser, credentials)
-            resume = getattr(fetcher, "resume_after_security_code", None)
+            if interactive:
+                # The owner cleared the gate on the live page themselves. This
+                # only picks the acquisition back up on that same tab.
+                resume = getattr(fetcher, "resume_after_interactive_challenge", None)
+                fetch_statement = lambda month: resume(month)  # noqa: E731
+            else:
+                resume = getattr(fetcher, "resume_after_security_code", None)
+                fetch_statement = lambda month: resume(month, code)  # noqa: E731
             if not callable(resume):
-                raise RuntimeError("この請求元は確認コードによる再開に対応していません。")
+                raise RuntimeError("この請求元は安全な再開に対応していません。")
             result = run_auto_acquisition(
                 service_id=service_id,
                 target_month=target_month,
                 fetcher=fetcher,
                 storage=storage,
                 on_progress=lambda event: status_box.write(event.message),
-                fetch_statement=lambda month: resume(month, code),
+                fetch_statement=fetch_statement,
             )
     except challenge_runtime.BrowserLeaseUnavailableError:
         st.session_state.pop(SECURITY_CHALLENGE_KEY, None)
@@ -941,15 +962,27 @@ def render_security_code_form(
 
     expires_label = metadata.expires_at.astimezone(TOKYO).strftime("%H:%M")
     message = str(challenge.get("message") or "追加の本人確認コードが必要です。")
-    st.warning(
-        f"{service.label}: {message}"
-        " iPhoneで確認し、この画面へ戻って入力してください。自動取得は終了せず待機しています。",
-        icon=":material/mark_email_unread:",
-    )
-    st.caption(f"入力期限の目安: {expires_label}　このタブは閉じたり再読み込みしたりしないでください。")
+    interactive = str(challenge.get("kind") or "") in INTERACTIVE_CHALLENGE_KINDS
+    if interactive:
+        st.warning(
+            f"{service.label}: {message}"
+            " 下の画面で操作してください。自動取得は終了せず、同じChromeで待機しています。",
+            icon=":material/touch_app:",
+        )
+    else:
+        st.warning(
+            f"{service.label}: {message}"
+            " iPhoneで確認し、この画面へ戻って入力してください。自動取得は終了せず待機しています。",
+            icon=":material/mark_email_unread:",
+        )
+    st.caption(f"操作期限の目安: {expires_label}　このタブは閉じたり再読み込みしたりしないでください。")
     error_message = str(challenge.get("error") or "")
     if error_message:
         st.error(error_message, icon=":material/error:")
+
+    if interactive:
+        render_interactive_challenge(storage, batch, challenge, token)
+        return
 
     with st.form("security_code_form", clear_on_submit=True, border=True):
         minimum = int(challenge.get("min_length") or 6)
@@ -988,6 +1021,51 @@ def render_security_code_form(
 
     if st.button(
         "新しい確認コードを発行",
+        use_container_width=True,
+        icon=":material/refresh:",
+    ):
+        restart_security_challenge(batch, challenge)
+
+
+def render_interactive_challenge(
+    storage: DriveStorage,
+    batch: dict[str, Any],
+    challenge: dict[str, Any],
+    token: str,
+) -> None:
+    """Mirror the provider's page so the owner can clear its gate by hand.
+
+    Epos guards its sign-in with a slide puzzle, which no code can express and
+    which the app must not answer for the owner. Holding the same Chrome open
+    and showing it here keeps every other step automatic: once the owner has
+    worked the control, the acquisition carries on from that very page.
+    """
+
+    try:
+        with challenge_runtime.browser_lease_registry.checkout(
+            token,
+            expected_service_id=str(challenge.get("service_id") or ""),
+            expected_target_month=str(challenge.get("target_month") or ""),
+        ) as lease:
+            live_view.render_live_view(
+                st,
+                lease.browser,
+                key=f"live_view_{token}",
+                allowed_hosts=tuple(challenge.get("allowed_hosts") or ()),
+            )
+    except challenge_runtime.BrowserLeaseUnavailableError:
+        restart_security_challenge(batch, challenge)
+
+    if st.button(
+        "操作が終わったので自動取得を続ける",
+        type="primary",
+        use_container_width=True,
+        icon=":material/play_arrow:",
+    ):
+        resume_security_code(storage, batch, challenge, "")
+
+    if st.button(
+        "最初からやり直す",
         use_container_width=True,
         icon=":material/refresh:",
     ):

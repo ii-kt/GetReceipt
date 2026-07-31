@@ -360,6 +360,17 @@ class EposAutoFetcher:
             logs=tuple(form.get("logs") or ()),
         )
 
+    def resume_after_interactive_challenge(self, target_month: str) -> FetchedStatement:
+        """Continue on the same live page once the owner has cleared a gate.
+
+        Epos guards the sign-in with a slide puzzle. Nothing here answers it;
+        the owner does that in the live view, and this only picks the
+        acquisition back up on the page they left behind.
+        """
+
+        self._wait_for_login_after_security_code()
+        return self.fetch_pdf(target_month)
+
     def resume_after_security_code(self, target_month: str, code: str) -> FetchedStatement:
         """Submit EPOS's official code to the exact live Chrome page."""
 
