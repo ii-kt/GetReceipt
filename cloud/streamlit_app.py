@@ -80,6 +80,7 @@ SECURITY_CHALLENGE_KEY = "getreceipt_security_challenge"
 # Gates the owner has to work by hand on the provider's own page, because no
 # code can express them. The browser is held open and mirrored instead.
 INTERACTIVE_CHALLENGE_KINDS = frozenset({"captcha", "interactive"})
+PUZZLE_OPEN_KEY = "getreceipt_puzzle_open"
 SECURITY_WAITING_PHASE = "awaiting_security_code"
 SECURITY_SUBMITTING_PHASE = "submitting_security_code"
 LOGGER = logging.getLogger(__name__)
@@ -864,6 +865,21 @@ def resume_security_code(
 
     if result is not None and getattr(result, "action_required", False):
         updated = dict(challenge)
+        if interactive:
+            # The gate is still up: either the piece is not in place yet or the
+            # provider issued a fresh puzzle. Keep the same browser and let the
+            # owner try again rather than starting the sign-in over.
+            challenge_message = str(
+                getattr(getattr(result, "challenge", None), "message", "")
+            )
+            updated["error"] = (
+                challenge_message
+                or "パズルがまだ完成していません。ピースを枠に合わせてください。"
+            )
+            st.session_state[SECURITY_CHALLENGE_KEY] = updated
+            st.session_state[f"{PUZZLE_OPEN_KEY}_{token}"] = True
+            status_box.update(label="パズルをもう一度確認してください。", state="error")
+            st.rerun()
         minimum = int(challenge.get("min_length") or 6)
         maximum = int(challenge.get("max_length") or 6)
         expected_label = (
@@ -1041,6 +1057,21 @@ def render_interactive_challenge(
     worked the control, the acquisition carries on from that very page.
     """
 
+    opened_key = f"{PUZZLE_OPEN_KEY}_{token}"
+    if not st.session_state.get(opened_key):
+        st.caption(
+            "パズルを開いて、ピースを枠に合わせてください。"
+            "合わせ終わったら「🧩 解除して自動取得を続ける」を押します。"
+        )
+        if st.button(
+            "🧩 パズルを開く",
+            type="primary",
+            use_container_width=True,
+        ):
+            st.session_state[opened_key] = True
+            st.rerun()
+        return
+
     try:
         with challenge_runtime.browser_lease_registry.checkout(
             token,
@@ -1054,14 +1085,15 @@ def render_interactive_challenge(
                 allowed_hosts=tuple(challenge.get("allowed_hosts") or ()),
             )
     except challenge_runtime.BrowserLeaseUnavailableError:
+        st.session_state.pop(opened_key, None)
         restart_security_challenge(batch, challenge)
 
     if st.button(
-        "操作が終わったので自動取得を続ける",
+        "🧩 解除して自動取得を続ける",
         type="primary",
         use_container_width=True,
-        icon=":material/play_arrow:",
     ):
+        st.session_state.pop(opened_key, None)
         resume_security_code(storage, batch, challenge, "")
 
     if st.button(
@@ -1069,6 +1101,7 @@ def render_interactive_challenge(
         use_container_width=True,
         icon=":material/refresh:",
     ):
+        st.session_state.pop(opened_key, None)
         restart_security_challenge(batch, challenge)
 
 

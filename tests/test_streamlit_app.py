@@ -633,21 +633,27 @@ class StreamlitAppTest(unittest.TestCase):
             app.run(timeout=20)
             next(b for b in app.button if "自動取得" in b.label).click().run(timeout=20)
 
-            # The live page is mirrored, and no code box is offered.
-            live_view.assert_called()
+            # No code box is offered, and the page is not mirrored until asked.
             self.assertEqual([], [item.label for item in app.text_input])
+            live_view.assert_not_called()
             self.assertEqual(
                 "awaiting_security_code",
                 app.session_state["getreceipt_batch"]["phase"],
             )
             browser.close.assert_not_called()
+
+            open_button = next(b for b in app.button if b.label == "🧩 パズルを開く")
+            open_button.click().run(timeout=20)
+
+            live_view.assert_called()
             self.assertEqual(
                 ("www.eposcard.co.jp",),
                 live_view.call_args.kwargs["allowed_hosts"],
             )
+            browser.close.assert_not_called()
 
             resume_button = next(
-                b for b in app.button if b.label == "操作が終わったので自動取得を続ける"
+                b for b in app.button if b.label == "🧩 解除して自動取得を続ける"
             )
             resume_button.click().run(timeout=20)
 
@@ -656,6 +662,68 @@ class StreamlitAppTest(unittest.TestCase):
         self.assertEqual([], list(app.exception))
         markdown = "\n".join(item.value for item in app.markdown)
         self.assertIn("4件すべてのPDFをGoogle Driveで確認しました", markdown)
+
+    def test_an_unfinished_puzzle_keeps_the_same_browser_and_reopens(self) -> None:
+        """Pressing 解除 too early must not throw the sign-in away.
+
+        A new sign-in means a new puzzle and another login attempt, so an
+        unfinished piece keeps the same Chrome and simply shows it again.
+        """
+
+        files = [
+            receipt_file("20260812", "中部テレコミュニケーション株式会社", 10002),
+            receipt_file("20260812", "フラットエナジー株式会社", 10003),
+            receipt_file("20260709", "NTTファイナンス株式会社", 10004),
+        ]
+        storage = FakeDriveStorage(files)
+        registry = FakeBrowserLeaseRegistry()
+        browser = MagicMock()
+
+        class PuzzleFetcher:
+            def resume_after_interactive_challenge(self, target_month):
+                return object()
+
+        def acquire(**kwargs):
+            fetch = kwargs.get("fetch_statement")
+            if fetch is not None:
+                fetch(kwargs["target_month"])
+            return SimpleNamespace(
+                success=False,
+                action_required=True,
+                challenge=SimpleNamespace(
+                    kind="captcha",
+                    message="パズルがまだ完成していません。",
+                ),
+                failure=None,
+            )
+
+        app = self.app()
+        with (
+            patch.object(DriveStorage, "from_secrets", return_value=storage),
+            patch("src.automation.browser_session.ManagedBrowser", return_value=browser),
+            patch(
+                "src.automation.providers.build_receipt_fetcher",
+                return_value=PuzzleFetcher(),
+            ),
+            patch("src.workflows.auto_acquisition.run_auto_acquisition", side_effect=acquire),
+            patch("src.automation.security_challenge.browser_lease_registry", registry),
+            patch("src.ui.live_view.render_live_view"),
+        ):
+            app.run(timeout=20)
+            next(b for b in app.button if "自動取得" in b.label).click().run(timeout=20)
+            next(b for b in app.button if b.label == "🧩 パズルを開く").click().run(timeout=20)
+            next(
+                b for b in app.button if b.label == "🧩 解除して自動取得を続ける"
+            ).click().run(timeout=20)
+
+        self.assertTrue(any("パズル" in item.value for item in app.error))
+        # The browser is still held, and the puzzle is shown again straight away.
+        self.assertEqual([], registry.discard_calls)
+        browser.close.assert_not_called()
+        self.assertTrue(
+            any(b.label == "🧩 解除して自動取得を続ける" for b in app.button)
+        )
+        self.assertEqual([], list(app.exception))
 
     def test_a_month_the_provider_has_not_billed_is_not_shown_as_a_failure(self) -> None:
         """Wi-Fi and electricity bill the month after use.

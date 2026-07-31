@@ -298,6 +298,47 @@ return "form.submit()";
 })()"""
 
 
+def build_epos_puzzle_state_expression() -> str:
+    """Report whether the image check is still on screen and whether it is answered.
+
+    ``answered`` only reflects what the owner's own dragging has already put
+    into the page's hidden field. Nothing here computes or alters it.
+    """
+
+    return r"""(() => {
+const form = document.forms["puzzleVerifyForm"]
+  || [...document.querySelectorAll("form")].find((f) => f.querySelector("input[name='capy_answer']"));
+if (!form) return { present: false };
+const answer = form.querySelector("input[name='capy_answer']");
+const challenge = form.querySelector("input[name='capy_challengekey']");
+return {
+  present: true,
+  answered: !!answer && String(answer.value || "").trim().length > 0,
+  hasChallenge: !!challenge && String(challenge.value || "").trim().length > 0,
+};
+})()"""
+
+
+def build_epos_puzzle_submit_expression() -> str:
+    """Send the image check the owner just completed, exactly as the page would.
+
+    The answer submitted is whatever the owner's dragging left in the page's
+    own hidden field; it is never computed here.
+    """
+
+    return r"""(() => {
+const form = document.forms["puzzleVerifyForm"]
+  || [...document.querySelectorAll("form")].find((f) => f.querySelector("input[name='capy_answer']"));
+if (!form) return "";
+if (typeof window.login === "function") {
+  window.login();
+  return "login()";
+}
+form.submit();
+return "form.submit()";
+})()"""
+
+
 class EposAutoFetcher:
     def __init__(self, browser: ManagedBrowser, credentials: dict[str, str] | None = None) -> None:
         self.browser = browser
@@ -363,11 +404,22 @@ class EposAutoFetcher:
     def resume_after_interactive_challenge(self, target_month: str) -> FetchedStatement:
         """Continue on the same live page once the owner has cleared a gate.
 
-        Epos guards the sign-in with a slide puzzle. Nothing here answers it;
-        the owner does that in the live view, and this only picks the
-        acquisition back up on the page they left behind.
+        Epos guards the sign-in with a slide puzzle. Nothing here answers it:
+        the owner moves the piece in the live view, and this only submits the
+        answer their own dragging left in the page and carries on.
         """
 
+        state = self.browser.evaluate(build_epos_puzzle_state_expression(), timeout=10) or {}
+        if state.get("present"):
+            if not state.get("answered"):
+                raise AcquisitionError(
+                    "パズルがまだ完成していません。",
+                    code="INTERACTIVE_CHALLENGE_INCOMPLETE",
+                    advice="ピースを枠に合わせてから、もう一度「解除」を押してください。",
+                    challenge_kind=ChallengeKind.CAPTCHA,
+                )
+            self.browser.evaluate(build_epos_puzzle_submit_expression(), timeout=10)
+            time.sleep(3.0)
         self._wait_for_login_after_security_code()
         return self.fetch_pdf(target_month)
 
