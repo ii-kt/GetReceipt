@@ -38,6 +38,7 @@ from src.jobs.client import (
     WorkerConfigError,
     worker_connection_from_secrets,
 )
+from src.storage.browser_profile_store import BrowserProfileStore
 from src.storage.drive_storage import DriveStorage
 from src.ui import remote_jobs
 from src.ui.access_control import require_owner_access
@@ -312,13 +313,49 @@ def queue_batch(target_month: str, service_ids: list[str]) -> None:
     st.rerun()
 
 
-def cleanup_runtime(browser: ManagedBrowser | None, run_dir: Path) -> str:
+def profile_store_from_secrets(storage: DriveStorage | None) -> Any | None:
+    """Build the store that keeps each provider's browser recognisable."""
+
+    if storage is None:
+        return None
+    try:
+        encryption_key = str(st.secrets["microsoft_graph"]["encryption_key"] or "")
+    except Exception:
+        return None
+    if not encryption_key:
+        return None
+    try:
+        return BrowserProfileStore(
+            drive_service=storage.service,
+            folder_id=storage.folder_id,
+            encryption_key=encryption_key,
+        )
+    except Exception:
+        return None
+
+
+def cleanup_runtime(
+    browser: ManagedBrowser | None,
+    run_dir: Path,
+    *,
+    profile_store: Any | None = None,
+    service_id: str = "",
+) -> str:
     errors: list[str] = []
     if browser is not None:
         try:
-            browser.close(clear_profile=True)
+            # Close first: Chrome holds its cookie database open, so a copy
+            # taken while it is running can be torn.
+            browser.close(clear_profile=False)
         except Exception:
             errors.append("browser")
+        if profile_store is not None and service_id:
+            try:
+                profile_store.save(service_id, run_dir / "profile")
+            except Exception:
+                # Being recognised next time is a convenience. It must never
+                # cost the acquisition that just ran.
+                LOGGER.info("Browser profile was not kept for %s", service_id)
 
     runtime_root = (DATA_DIR / "acquisition-runtime").resolve()
     target = run_dir.resolve()
@@ -663,8 +700,16 @@ def execute_next_service(storage: DriveStorage, batch: dict[str, Any]) -> None:
     result = None
     unexpected_error = ""
     runtime_preserved = False
+    profile_store = profile_store_from_secrets(storage)
     try:
         credentials = service_credentials(st.secrets, service_id)
+        if profile_store is not None:
+            # Start from the browser this provider already knows. A first-time
+            # browser is what makes them ask for a puzzle or a fresh code.
+            try:
+                profile_store.restore(service_id, run_dir / "profile")
+            except Exception:
+                LOGGER.info("Stored browser profile was not used for %s", service_id)
         browser = ManagedBrowser(
             profile_dir=run_dir / "profile",
             download_dir=run_dir / "downloads",
@@ -741,7 +786,12 @@ def execute_next_service(storage: DriveStorage, batch: dict[str, Any]) -> None:
         LOGGER.warning("Acquisition attempt failed (%s)", type(error).__name__)
     finally:
         if not runtime_preserved:
-            cleanup_error = cleanup_runtime(browser, run_dir)
+            cleanup_error = cleanup_runtime(
+                browser,
+                run_dir,
+                profile_store=profile_store,
+                service_id=service_id,
+            )
             if cleanup_error:
                 LOGGER.error(
                     "Acquisition runtime cleanup failed (%s)",
@@ -820,6 +870,9 @@ def resume_security_code(
         expanded=True,
     )
 
+    profile_store = profile_store_from_secrets(storage)
+    solved_browser = None
+    solved_profile_dir = None
     try:
         with challenge_runtime.browser_lease_registry.checkout(
             token,
@@ -828,6 +881,8 @@ def resume_security_code(
         ) as lease:
             credentials = service_credentials(st.secrets, service_id)
             fetcher = build_receipt_fetcher(service_id, lease.browser, credentials)
+            solved_browser = lease.browser
+            solved_profile_dir = Path(lease.run_dir) / "profile"
             if interactive:
                 # The owner cleared the gate on the live page themselves. This
                 # only picks the acquisition back up on that same tab.
@@ -893,6 +948,22 @@ def resume_security_code(
         st.session_state[SECURITY_CHALLENGE_KEY] = updated
         status_box.update(label="確認コードを再確認してください。", state="error")
         st.rerun()
+
+    # Whatever the provider granted for clearing this challenge lives in the
+    # cookies of that browser. Keep them, so the next month is not challenged
+    # from scratch again.
+    if (
+        profile_store is not None
+        and solved_browser is not None
+        and solved_profile_dir is not None
+        and result is not None
+        and getattr(result, "success", False)
+    ):
+        try:
+            solved_browser.close(clear_profile=False)
+            profile_store.save(service_id, solved_profile_dir)
+        except Exception:
+            LOGGER.info("Browser profile was not kept for %s", service_id)
 
     challenge_runtime.browser_lease_registry.discard(token)
     st.session_state.pop(SECURITY_CHALLENGE_KEY, None)
