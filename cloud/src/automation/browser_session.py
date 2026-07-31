@@ -132,6 +132,36 @@ def find_browser_executable() -> str | None:
     return None
 
 
+def _windowed_user_agent(user_agent: str) -> str:
+    """Return the same Chrome User-Agent without the headless marker.
+
+    Only the "Headless" token is removed; the browser, its real version and
+    the platform are left untouched, so the provider still sees exactly which
+    Chrome is asking. Returns "" when there is nothing to correct, and the
+    override is then skipped entirely.
+    """
+
+    value = str(user_agent or "")
+    if "Headless" not in value:
+        return ""
+    return value.replace("HeadlessChrome/", "Chrome/").replace("Headless", "")
+
+
+def _navigator_platform(user_agent: str) -> str:
+    """Return the navigator.platform that matches this User-Agent.
+
+    A Windows platform under a Linux User-Agent is itself a bot signal, so the
+    two must agree; Streamlit Cloud runs Linux while local runs are Windows.
+    """
+
+    value = str(user_agent or "")
+    if "Windows" in value:
+        return "Win32"
+    if "Macintosh" in value:
+        return "MacIntel"
+    return "Linux x86_64"
+
+
 def find_free_port(start_at: int = 19021) -> int:
     for port in range(start_at, start_at + 200):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -221,6 +251,7 @@ class ManagedBrowser:
         self.target_id: str | None = None
         self.session_id: str | None = None
         self.uses_headless = True
+        self.user_agent = ""
 
     def ensure_started(self) -> None:
         if self.process is not None and self.process.poll() is not None:
@@ -247,8 +278,10 @@ class ManagedBrowser:
         if self.connection is None:
             version = self._wait_for_version()
             self.connection = CDPConnection(version["webSocketDebuggerUrl"])
-            product = str(
-                self.connection.send("Browser.getVersion").get("product") or ""
+            browser_version = self.connection.send("Browser.getVersion")
+            product = str(browser_version.get("product") or "")
+            self.user_agent = _windowed_user_agent(
+                str(browser_version.get("userAgent") or "")
             )
             accepted_products = ["Chrome/"]
             if _chromium_fallback_allowed():
@@ -512,10 +545,27 @@ class ManagedBrowser:
     def _apply_environment_overrides(self) -> None:
         assert self.connection is not None
         assert self.session_id is not None
-        for method, params in (
+        overrides: list[tuple[str, dict[str, Any]]] = [
             ("Emulation.setLocaleOverride", {"locale": "ja-JP"}),
             ("Emulation.setTimezoneOverride", {"timezoneId": "Asia/Tokyo"}),
-        ):
+        ]
+        if self.user_agent:
+            # Headless Chrome puts "HeadlessChrome" in its User-Agent, and the
+            # bot filters in front of the providers' own member pages reject
+            # the sign-in on that alone. The override keeps the real Chrome
+            # version and only drops the headless token, so the account owner
+            # can reach their own statements.
+            overrides.append(
+                (
+                    "Emulation.setUserAgentOverride",
+                    {
+                        "userAgent": self.user_agent,
+                        "acceptLanguage": ACCEPT_LANGUAGE,
+                        "platform": _navigator_platform(self.user_agent),
+                    },
+                )
+            )
+        for method, params in overrides:
             try:
                 self.connection.send(method, params, session_id=self.session_id)
             except BrowserAutomationError:

@@ -299,14 +299,96 @@ class SplitCodeBoxesTest(unittest.TestCase):
         self.assertEqual(6, observation.split_candidates)
 
 
-class DAccountMailCodeSourceTest(unittest.TestCase):
-    def test_security_code_wording_is_recognised(self) -> None:
-        import re as _re
+class MobileMailCodeSourceTest(unittest.TestCase):
+    """携帯 has two sign-in routes and each mails a differently worded code."""
 
-        source = VERIFICATION_CODE_SOURCES["mobile"]
-        body = "[セキュリティコード] 660763 [有効期限] 07/29 23:12"
+    SOURCE = VERIFICATION_CODE_SOURCES["mobile"]
 
-        match = _re.search(source.code_pattern, body)
+    def _mobile_message(self, *, body: str, sender: str) -> dict:
+        received = NOW - timedelta(minutes=1)
+        return {
+            "id": f"id-{sender}",
+            "subject": "認証のお知らせ",
+            "from": {"emailAddress": {"address": sender}},
+            "receivedDateTime": received.isoformat().replace("+00:00", "Z"),
+            "body": {"contentType": "text", "content": body},
+        }
 
-        self.assertIsNotNone(match)
-        self.assertEqual("660763", match.group(1))
+    def test_reads_the_d_account_security_code(self) -> None:
+        message = self._mobile_message(
+            body="[セキュリティコード] 660763 [有効期限] 07/29 23:12",
+            sender="no-reply@id.smt.docomo.ne.jp",
+        )
+        reader, _ = _reader([message])
+
+        code = reader.wait_for_code(
+            self.SOURCE,
+            requested_after=NOW - timedelta(minutes=2),
+            timeout_seconds=0,
+        )
+
+        self.assertEqual("660763", code)
+
+    def test_reads_the_web_billing_one_time_password(self) -> None:
+        message = self._mobile_message(
+            body=(
+                "Ｗｅｂビリングのログイン認証です。\n"
+                "ワンタイムパスワード：418902\n"
+                "有効期限内にご入力ください。"
+            ),
+            sender="webbilling_info@ntt-finance.co.jp",
+        )
+        reader, _ = _reader([message])
+
+        code = reader.wait_for_code(
+            self.SOURCE,
+            requested_after=NOW - timedelta(minutes=2),
+            timeout_seconds=0,
+        )
+
+        self.assertEqual("418902", code)
+
+    def test_ignores_the_same_wording_from_another_company(self) -> None:
+        """Banks warn about one-time passwords in every notice they send."""
+
+        message = self._mobile_message(
+            body="偽サイトにワンタイムパスワード 123456 を入力しないでください。",
+            sender="SMBC_service@dn.smbc.co.jp",
+        )
+        reader, _ = _reader([message])
+
+        with self.assertRaises(MailCodeUnavailableError):
+            reader.wait_for_code(
+                self.SOURCE,
+                requested_after=NOW - timedelta(minutes=2),
+                timeout_seconds=0,
+            )
+
+    def test_rejects_a_lookalike_docomo_domain(self) -> None:
+        message = self._mobile_message(
+            body="[セキュリティコード] 660763",
+            sender="no-reply@docomo.ne.jp.evil.example",
+        )
+        reader, _ = _reader([message])
+
+        with self.assertRaises(MailCodeUnavailableError):
+            reader.wait_for_code(
+                self.SOURCE,
+                requested_after=NOW - timedelta(minutes=2),
+                timeout_seconds=0,
+            )
+
+    def test_merges_hits_from_every_search_term(self) -> None:
+        """Both terms are queried, so either route's mail is found."""
+
+        reader, session = _reader([])
+
+        reader.wait_for_code_attempted = True
+        with self.assertRaises(MailCodeUnavailableError):
+            reader.wait_for_code(
+                self.SOURCE,
+                requested_after=NOW,
+                timeout_seconds=0,
+            )
+
+        self.assertEqual(len(self.SOURCE.search_terms), session.requests)

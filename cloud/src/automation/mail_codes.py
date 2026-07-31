@@ -25,30 +25,54 @@ _CLOCK_SKEW = timedelta(minutes=2)
 
 @dataclass(frozen=True)
 class MailCodeSource:
-    """Where a provider's verification code arrives and how to read it."""
+    """Where a provider's verification code arrives and how to read it.
 
-    sender_address: str
-    code_pattern: str
+    ``search_terms`` only narrows what Graph returns. Trust comes from
+    ``sender_domains``: a message is read only when it was really sent from
+    one of the provider's own domains, so a broad search term stays safe.
+    """
+
+    search_terms: tuple[str, ...]
+    sender_domains: tuple[str, ...]
+    code_patterns: tuple[str, ...]
     subject_hint: str = ""
 
-    def sender_domain(self) -> str:
-        return self.sender_address.strip().casefold().rsplit("@", 1)[-1]
+    def matches_domain(self, address: str) -> bool:
+        normalized = address.strip().casefold()
+        if "@" not in normalized:
+            return False
+        domain = normalized.rsplit("@", 1)[-1]
+        return any(
+            domain == expected or domain.endswith("." + expected)
+            for expected in (item.strip().casefold() for item in self.sender_domains)
+            if expected
+        )
 
 
 VERIFICATION_CODE_SOURCES: dict[str, MailCodeSource] = {
     "commufa": MailCodeSource(
-        sender_address="news-ml@commufa.jp",
+        search_terms=("from:news-ml@commufa.jp",),
+        sender_domains=("commufa.jp",),
         subject_hint="ID を確認してください",
-        code_pattern=r"確認コード[\s:：]*([0-9]{6})",
+        code_patterns=(r"確認コード[\s:：]*([0-9]{6})",),
     ),
-    # d-account sends its verification code to SMS or to the contact mail
-    # address, whichever the owner selected. Only the mail route is readable
-    # here; with SMS selected this simply finds nothing and the owner is asked
-    # for the code instead.
+    # 携帯 has two sign-in routes into Web billing and each has its own code:
+    #   - d-account: a security code sent to SMS or to the contact mail
+    #     address, whichever destination the owner selected. Only the mail
+    #     route is readable here.
+    #   - Web billing ID: a one-time password NTT Finance mails from
+    #     webbilling_info@ntt-finance.co.jp.
+    # The exact sending address of the d-account mail is not known ahead of
+    # time, so the search is by wording and the sender is checked against the
+    # provider's domains rather than a guessed address.
     "mobile": MailCodeSource(
-        sender_address="cfg.smt.docomo.ne.jp",
+        search_terms=("セキュリティコード", "ワンタイムパスワード"),
+        sender_domains=("docomo.ne.jp", "nttdocomo.co.jp", "ntt-finance.co.jp"),
         subject_hint="",
-        code_pattern=r"セキュリティコード[^0-9]{0,12}([0-9]{4,8})",
+        code_patterns=(
+            r"セキュリティコード[^0-9]{0,16}([0-9]{4,8})",
+            r"ワンタイムパスワード[^0-9]{0,40}?([0-9]{4,8})",
+        ),
     ),
 }
 
@@ -183,6 +207,37 @@ class MailVerificationCodeReader:
             headers = {}
 
     def _search(self, source: MailCodeSource) -> list[dict[str, Any]]:
+        """Return every candidate message across the source's search terms.
+
+        A provider may deliver its code from more than one system, so the
+        terms are queried separately and merged newest-first. Duplicates are
+        dropped by message id.
+        """
+
+        merged: dict[str, dict[str, Any]] = {}
+        failures = 0
+        for term in source.search_terms:
+            try:
+                messages = self._search_once(term)
+            except MailCodeUnavailableError:
+                failures += 1
+                continue
+            for index, message in enumerate(messages):
+                # Graph always returns an id; fall back to a positional key so
+                # a message is never silently dropped for lacking one.
+                key = str(message.get("id") or f"{term}#{index}")
+                merged.setdefault(key, message)
+        if failures and failures == len(source.search_terms):
+            raise MailCodeUnavailableError(
+                "確認コードのメールを検索できませんでした。"
+            )
+        return sorted(
+            merged.values(),
+            key=lambda item: str(item.get("receivedDateTime") or ""),
+            reverse=True,
+        )
+
+    def _search_once(self, term: str) -> list[dict[str, Any]]:
         token = self._access_token_provider()
         try:
             response = self._session.get(
@@ -192,8 +247,8 @@ class MailVerificationCodeReader:
                     "Accept": "application/json",
                 },
                 params={
-                    "$search": f'"from:{source.sender_address}"',
-                    "$top": "10",
+                    "$search": f'"{term}"',
+                    "$top": "25",
                     "$select": "id,subject,from,receivedDateTime,body",
                 },
                 timeout=30,
@@ -225,12 +280,7 @@ class MailVerificationCodeReader:
             email = sender.get("emailAddress")
             if isinstance(email, dict):
                 address = str(email.get("address") or "")
-        normalized = address.strip().casefold()
-        if "@" not in normalized:
-            return False
-        domain = normalized.rsplit("@", 1)[-1]
-        expected = source.sender_domain()
-        return domain == expected or domain.endswith("." + expected)
+        return source.matches_domain(address)
 
     @staticmethod
     def _extract_code(message: dict[str, Any], source: MailCodeSource) -> str:
@@ -242,8 +292,11 @@ class MailVerificationCodeReader:
         subject = str(message.get("subject") or "")
         if source.subject_hint and source.subject_hint not in subject:
             return ""
-        match = re.search(source.code_pattern, text)
-        return match.group(1) if match else ""
+        for pattern in source.code_patterns:
+            match = re.search(pattern, text)
+            if match:
+                return match.group(1)
+        return ""
 
 
 def _parse_timestamp(value: Any) -> datetime | None:
@@ -259,11 +312,16 @@ def _parse_timestamp(value: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
-# Checked against the owner's mailbox on 2026-07-25:
+# Checked against the owner's mailbox on 2026-07-31:
 #   - commufa   : sends the code by mail -> automated above.
-#   - webbilling: no verification-code mail exists (only billing notices and
-#                 registration confirmations), so its code arrives by SMS or
-#                 not at all and cannot be read here.
+#   - webbilling: no code mail has arrived yet, because the account signs in
+#                 with a d-account and that code goes to SMS. Both readable
+#                 routes are wired up in advance:
+#                   * d-account with its destination set to the contact mail
+#                     address (docomo sends to "SMSまたは連絡先メールアドレス"),
+#                   * the Web billing ID sign-in, whose one-time password NTT
+#                     Finance mails from webbilling_info@ntt-finance.co.jp.
+#                 Neither can be turned on from here; the owner selects one.
 #   - epos      : the three-digit code is printed on the card, never mailed,
 #                 and is deliberately not stored.
 #   - tokuten   : no verification step; the invoice is read through Graph.

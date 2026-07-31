@@ -19,15 +19,21 @@ from src.automation.official_sites import (  # noqa: E402
 
 
 class _Browser:
-    def __init__(self) -> None:
+    def __init__(self, evaluations: list | None = None) -> None:
         self.clicks: list[tuple[int, int]] = []
         self.keys: list[str] = []
+        self.evaluated: list[str] = []
+        self._evaluations = list(evaluations or [])
 
     def click_at(self, x: int, y: int) -> None:
         self.clicks.append((x, y))
 
     def press_key(self, key: str) -> None:
         self.keys.append(key)
+
+    def evaluate(self, expression: str, **_kwargs):
+        self.evaluated.append(expression)
+        return self._evaluations.pop(0) if self._evaluations else None
 
 
 class LoginSubmissionGuardTest(unittest.TestCase):
@@ -49,14 +55,41 @@ class LoginSubmissionGuardTest(unittest.TestCase):
         self.assertEqual([(10, 20)], browser.clicks)
 
     def test_epos_human_layout_submit_has_the_same_limit(self) -> None:
-        browser = _Browser()
+        browser = _Browser([{"ok": True, "hit": True, "point": {"x": 30, "y": 40}}])
         fetcher = EposAutoFetcher(browser)  # type: ignore[arg-type]
-        layout = {"buttonPoint": {"x": 30, "y": 40}}
+        layout = {"buttonPoint": {"x": 999, "y": 999}}
 
         fetcher._submit_epos_login_button(layout)
         fetcher._submit_epos_login_button(layout)
 
+        # The point is re-measured at click time: focusing the inputs scrolls
+        # the page, so the point measured with the layout is already stale.
         self.assertEqual([(30, 40)], browser.clicks)
+
+    def test_epos_submits_in_page_when_the_click_would_miss(self) -> None:
+        """A click that lands behind the button must not strand the sign-in."""
+
+        browser = _Browser(
+            [{"ok": True, "hit": False, "point": {"x": 30, "y": 40}}, "login()"]
+        )
+        fetcher = EposAutoFetcher(browser)  # type: ignore[arg-type]
+
+        fetcher._submit_epos_login_button({"buttonPoint": {"x": 30, "y": 40}})
+
+        self.assertEqual([], browser.clicks)
+        self.assertIn("noCardUseDetailLoginForm", browser.evaluated[-1])
+
+    def test_epos_still_submits_only_once_through_the_in_page_route(self) -> None:
+        browser = _Browser(
+            [{"ok": False, "code": "EPOS_LOGIN_BUTTON_NOT_FOUND"}, "form.submit()"]
+        )
+        fetcher = EposAutoFetcher(browser)  # type: ignore[arg-type]
+
+        fetcher._submit_epos_login_button({})
+        fetcher._submit_epos_login_button({})
+
+        submits = [e for e in browser.evaluated if "noCardUseDetailLoginForm" in e]
+        self.assertEqual(1, len(submits))
 
     def test_commufa_submits_credentials_only_once(self) -> None:
         browser = _Browser()

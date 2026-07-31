@@ -216,12 +216,17 @@ const loginLink = [...document.querySelectorAll("a, button, input[type='submit']
     return text.includes("ログイン") || String(el.getAttribute("href") || "").includes("login()");
   });
 if (!loginId || !password || !loginLink) return { ok: false, code: "EPOS_LOGIN_LAYOUT_NOT_FOUND" };
+// Measure the button only after the field scrolling below has finished:
+// getBoundingClientRect is viewport-relative, so scrollIntoView on the two
+// inputs would leave a button rect that no longer points at the button.
+const loginIdPoint = pointOf(loginId);
+const passwordPoint = pointOf(password);
 const rect = loginLink.getBoundingClientRect();
 const centerY = Math.round(rect.top + rect.height / 2);
 return {
   ok: true,
-  loginIdPoint: pointOf(loginId),
-  passwordPoint: pointOf(password),
+  loginIdPoint,
+  passwordPoint,
   buttonRect: {
     left: Math.round(rect.left),
     right: Math.round(rect.right),
@@ -234,6 +239,62 @@ return {
   bubblePoint: { x: Math.round(rect.right - Math.min(20, rect.width * 0.07)), y: centerY },
   bubbleDragTarget: { x: Math.round(rect.left + rect.width * 0.95), y: centerY },
 };
+})()"""
+
+
+def build_epos_login_button_expression() -> str:
+    """Locate the login control and report whether a click would reach it.
+
+    Focusing the two inputs scrolls the page, so the button must be measured
+    again immediately before the click. ``hit`` says whether the point really
+    lands on the control; without that check a click can land on the section
+    behind it and silently never submit the form.
+    """
+
+    return r"""(() => {
+const visible = (el) => {
+  if (!el || el.disabled) return false;
+  const style = getComputedStyle(el);
+  const rect = el.getBoundingClientRect();
+  return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+};
+const labelOf = (el) => [el.innerText, el.textContent, el.value, el.getAttribute && el.getAttribute("aria-label")].filter(Boolean).join(" ");
+const control = [...document.querySelectorAll("a, button, input[type='submit'], [role='button']")]
+  .filter(visible)
+  .find((el) => {
+    const href = String(el.getAttribute("href") || "");
+    if (href.includes("login()")) return true;
+    // The page also links to the separate card-member site, whose label
+    // starts with the same word.
+    if (href.includes("login_certify")) return false;
+    return labelOf(el).trim().includes("ログイン");
+  });
+if (!control) return { ok: false, code: "EPOS_LOGIN_BUTTON_NOT_FOUND" };
+control.scrollIntoView({ block: "center", inline: "center" });
+const rect = control.getBoundingClientRect();
+const point = { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+const at = document.elementFromPoint(point.x, point.y);
+return {
+  ok: true,
+  point,
+  hit: !!at && (at === control || control.contains(at) || at.contains(control)),
+};
+})()"""
+
+
+def build_epos_login_submit_expression() -> str:
+    """Submit the sign-in form the same way the page's own button does."""
+
+    return r"""(() => {
+const form = document.forms["noCardUseDetailLoginForm"]
+  || [...document.querySelectorAll("form")].find((f) => f.querySelector("input[name='passWord']"));
+if (!form) return "";
+if (typeof window.login === "function") {
+  window.login();
+  return "login()";
+}
+form.submit();
+return "form.submit()";
 })()"""
 
 
@@ -334,10 +395,25 @@ class EposAutoFetcher:
             )
         if code == "SECURITY_CHALLENGE":
             challenge_kind = normalize_challenge_kind(result.get("challengeKind"))
+            if challenge_kind == ChallengeKind.CAPTCHA.value:
+                # Epos answers the sign-in with a slide-puzzle image check.
+                # It is deliberately unsolvable by a program, so say what it
+                # is and point at the route that does work.
+                raise AcquisitionError(
+                    "エポスカードが画像認証（パズル）を表示しました。",
+                    code="SECURITY_CHALLENGE",
+                    advice=(
+                        "エポスカードはログイン時に画像パズルによる認証を行うため、"
+                        "自動ログインでは通過できません。"
+                        "エポスカードのサイトでお支払明細書PDFを保存し、"
+                        "「手動アップロード」から取り込んでください。"
+                    ),
+                    challenge_kind=challenge_kind,
+                )
             raise AcquisitionError(
                 "エポスカードで追加認証が表示されました。",
                 code="SECURITY_CHALLENGE",
-                advice="ワンタイムコード、CAPTCHA、本人確認などサイト側の追加認証が出ているため、通常ログインの自動入力では続行できません。",
+                advice="ワンタイムコード、本人確認などサイト側の追加認証が出ているため、通常ログインの自動入力では続行できません。",
                 challenge_kind=challenge_kind,
             )
         if code in {
@@ -439,8 +515,15 @@ return {
             # Already submitted in this attempt: keep waiting for the provider
             # instead of ending the job.
             return
-        point = layout["buttonPoint"]
-        self.browser.click_at(int(point["x"]), int(point["y"]))
+        target = self.browser.evaluate(build_epos_login_button_expression(), timeout=10) or {}
+        if target.get("ok") and target.get("hit"):
+            point = target["point"]
+            self.browser.click_at(int(point["x"]), int(point["y"]))
+            return
+        # The control moved or something covers it. Submitting in the page is
+        # deterministic, so the one submission this attempt is allowed always
+        # reaches the provider instead of leaving the sign-in waiting forever.
+        self.browser.evaluate(build_epos_login_submit_expression(), timeout=10)
 
     def _allow_credential_submission(self) -> bool:
         """Send the password at most once per attempt, without failing the job.

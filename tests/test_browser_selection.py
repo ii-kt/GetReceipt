@@ -15,8 +15,48 @@ if str(CLOUD) not in sys.path:
 
 from src.automation.browser_session import (  # noqa: E402
     ManagedBrowser,
+    _navigator_platform,
+    _windowed_user_agent,
     find_browser_executable,
 )
+
+
+LINUX_HEADLESS_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "HeadlessChrome/138.0.7204.157 Safari/537.36"
+)
+WINDOWS_HEADLESS_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) HeadlessChrome/138.0.7204.157 Safari/537.36"
+)
+
+
+class HeadlessUserAgentTest(unittest.TestCase):
+    """The providers' bot filters reject a sign-in on the headless marker alone."""
+
+    def test_headless_marker_is_dropped_but_the_version_is_kept(self) -> None:
+        corrected = _windowed_user_agent(WINDOWS_HEADLESS_UA)
+
+        self.assertNotIn("Headless", corrected)
+        self.assertIn("Chrome/138.0.7204.157", corrected)
+        self.assertIn("Windows NT 10.0; Win64; x64", corrected)
+
+    def test_a_normal_user_agent_is_left_alone(self) -> None:
+        """No override is applied when there is nothing to correct."""
+
+        self.assertEqual(
+            "", _windowed_user_agent(WINDOWS_HEADLESS_UA.replace("Headless", ""))
+        )
+
+    def test_platform_follows_the_user_agent(self) -> None:
+        """A Windows platform under a Linux agent would itself look automated."""
+
+        self.assertEqual(
+            "Linux x86_64", _navigator_platform(_windowed_user_agent(LINUX_HEADLESS_UA))
+        )
+        self.assertEqual(
+            "Win32", _navigator_platform(_windowed_user_agent(WINDOWS_HEADLESS_UA))
+        )
 
 
 class BrowserSelectionTest(unittest.TestCase):
