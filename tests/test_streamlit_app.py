@@ -563,6 +563,53 @@ class StreamlitAppTest(unittest.TestCase):
         self.assertGreater(len(attempted), 1)
         self.assertEqual([], list(app.exception))
 
+    def test_a_month_the_provider_has_not_billed_is_not_shown_as_a_failure(self) -> None:
+        """Wi-Fi and electricity bill the month after use.
+
+        Asking for the current month before the bill exists is the normal
+        case, so it must not be painted red alongside real breakages.
+        """
+
+        storage = FakeDriveStorage([])
+
+        def acquire(**kwargs):
+            if kwargs["service_id"] == "commufa":
+                return SimpleNamespace(
+                    success=False,
+                    file_name="",
+                    failure=SimpleNamespace(
+                        code="COMMUFA_MONTH_NOT_ISSUED",
+                        message="コミュファに2026年8月分の利用明細がまだ掲載されていません。",
+                        detail="掲載済みの最新は2026年7月分です。",
+                    ),
+                )
+            return SimpleNamespace(
+                success=False,
+                file_name="",
+                failure=SimpleNamespace(
+                    code="LOGIN_FAILED", message="ログインに失敗しました。", detail=""
+                ),
+            )
+
+        app = self.app()
+        with (
+            patch.object(DriveStorage, "from_secrets", return_value=storage),
+            patch("src.automation.browser_session.ManagedBrowser"),
+            patch("src.automation.providers.build_receipt_fetcher", return_value=object()),
+            patch("src.workflows.auto_acquisition.run_auto_acquisition", side_effect=acquire),
+        ):
+            app.run(timeout=20)
+            next(b for b in app.button if "自動取得" in b.label).click().run(timeout=60)
+
+        cards = [str(item.value) for item in app.markdown if "gr-card" in str(item.value)]
+        commufa = next(c for c in cards if "中部テレコミュニケーション" in c)
+
+        self.assertIn("gr-card--not_issued", commufa)
+        self.assertIn("未発行", commufa)
+        self.assertNotIn("COMMUFA_MONTH_NOT_ISSUED", commufa)
+        # A genuine breakage still reads as a failure.
+        self.assertIn("gr-card--failed", next(c for c in cards if "エポスカード" in c))
+
 
 if __name__ == "__main__":
     unittest.main()

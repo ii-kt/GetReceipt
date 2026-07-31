@@ -15,6 +15,9 @@ _STATUS = {
     "running": ("取得中", "running"),
     "failed": ("失敗", "failed"),
     "not_run": ("未実行", "queued"),
+    # Wi-Fi and electricity bill the month after use, so during the current
+    # month there is simply nothing to fetch yet. That is not a failure.
+    "not_issued": ("未発行", "queued"),
 }
 
 

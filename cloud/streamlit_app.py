@@ -66,6 +66,15 @@ FAILURES_KEY = "getreceipt_service_failures"
 # worker never imports this module and stays Chrome-Stable-only.
 os.environ.setdefault("GETRECEIPT_ALLOW_CHROMIUM", "1")
 NOTICE_KEY = "getreceipt_notice"
+# Wi-Fi and electricity bill the month after use, so asking for the current
+# month before the provider has issued it is expected, not a fault.
+NOT_ISSUED_FAILURE_CODES = frozenset(
+    {
+        "COMMUFA_MONTH_NOT_ISSUED",
+        "ATTACHMENT_NOT_FOUND",
+        "MESSAGE_NOT_FOUND",
+    }
+)
 SECURITY_CHALLENGE_KEY = "getreceipt_security_challenge"
 SECURITY_WAITING_PHASE = "awaiting_security_code"
 SECURITY_SUBMITTING_PHASE = "submitting_security_code"
@@ -222,15 +231,22 @@ def render_service_rows(
             status = "running"
             detail = "保存完了。Google Driveの表示を更新中"
         elif remote_failure:
-            status = "failed"
             reason = str(remote_failure.get("detail") or "")
             code = str(remote_failure.get("code") or "")
             base = remote_failure.get("message", "自動取得に失敗しました。")
-            detail = base
-            if code:
-                detail = f"{base}（{code}）"
-            if reason:
-                detail = f"{detail} {reason}"
+            if code in NOT_ISSUED_FAILURE_CODES:
+                # The provider has simply not billed this month yet. Showing it
+                # in red sends the owner looking for a fault that is not there,
+                # so drop the error code and keep the plain explanation.
+                status = "not_issued"
+                detail = f"{base} {reason}".strip()
+            else:
+                status = "failed"
+                detail = base
+                if code:
+                    detail = f"{base}（{code}）"
+                if reason:
+                    detail = f"{detail} {reason}"
         elif service.id == challenge_service:
             status = "running"
             detail = "本人確認コードの入力を待っています"
