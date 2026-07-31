@@ -21,6 +21,9 @@ class BrowserAutomationError(RuntimeError):
 
 
 ACCEPT_LANGUAGE = "ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7"
+# Large enough for a printed statement plus its base64 framing, bounded so a
+# runaway page cannot exhaust memory.
+MAX_CDP_MESSAGE_BYTES = 256 * 1024 * 1024
 _GOOGLE_CHROME_EXECUTABLES = {
     "chrome.exe",
     "google-chrome",
@@ -182,7 +185,16 @@ class CDPConnection:
                 "ブラウザ操作ライブラリが不足しています。requirements.txtを再インストールしてください。"
             ) from error
 
-        self.websocket = connect(websocket_url, open_timeout=20, ping_interval=None)
+        # A DevTools reply carries whole documents: Page.printToPDF returns the
+        # PDF itself and a page dump can be large. The library's 1 MiB default
+        # closes the socket mid-acquisition, so let a reply be as large as the
+        # statement it carries.
+        self.websocket = connect(
+            websocket_url,
+            open_timeout=20,
+            ping_interval=None,
+            max_size=MAX_CDP_MESSAGE_BYTES,
+        )
         self.next_id = 1
         self._send_lock = RLock()
 
