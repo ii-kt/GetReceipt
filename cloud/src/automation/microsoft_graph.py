@@ -43,6 +43,7 @@ class TokutenGraphFetcher:
     def fetch_pdf(self, target_month: str) -> FetchedStatement:
         query = build_tokuten_search_query(target_month, self.config)
         token = self.access_token_provider()
+        unauthenticated = False
         try:
             messages = self._get_json(
                 "/me/messages",
@@ -74,6 +75,19 @@ class TokutenGraphFetcher:
                 if not self._sender_authentication_passes(
                     header_payload.get("internetMessageHeaders")
                 ):
+                    # The mail is here; it just cannot be proved to be theirs.
+                    # Reporting that as "not issued yet" would have the owner
+                    # waiting for an invoice that already arrived.
+                    #
+                    # Only said of mail whose address really is the provider's.
+                    # A forged From must not be described as their invoice
+                    # having arrived, or the owner may go and file it by hand.
+                    if self._address_domain_allowed(message) and (
+                        self._sender_authentication_undetermined(
+                            header_payload.get("internetMessageHeaders")
+                        )
+                    ):
+                        unauthenticated = True
                     continue
                 attachments = self._get_json(
                     f"/me/messages/{message_id}/attachments",
@@ -138,6 +152,17 @@ class TokutenGraphFetcher:
         # something that is not broken.
         expected = expected_transaction_month("tokuten", target_month)
         year, month = parse_month_key(expected)
+        if unauthenticated:
+            raise AcquisitionError(
+                f"トクテンでんきの{year}年{month}月分の請求メールは届いていますが、"
+                "送信元を確認できませんでした。",
+                code="TOKUTEN_GRAPH_SENDER_UNVERIFIED",
+                advice=(
+                    "配信時に送信ドメインの認証記録が残らなかったメールです。"
+                    "なりすましの取り込みを避けるため取得を止めました。"
+                    "この月は手動アップロードで取り込んでください。"
+                ),
+            )
         raise AcquisitionError(
             f"トクテンでんきの{year}年{month}月分の請求メールがまだ見つかりません。",
             code="TOKUTEN_GRAPH_ATTACHMENT_NOT_FOUND",
@@ -145,6 +170,55 @@ class TokutenGraphFetcher:
                 f"この利用月の領収書は{year}年{month}月分の請求確定メールから取得します。"
                 "請求が確定して添付PDFが届いてから再実行してください。"
             ),
+        )
+
+    def _sender_authentication_undetermined(self, raw_headers: Any) -> bool:
+        """True when authentication could not be decided, not when it failed.
+
+        An outright failure means something was posing as the provider, and
+        the owner must not be told their invoice arrived and invited to file
+        it by hand. A timeout at delivery is different: the mail is very
+        probably theirs, there is simply no longer any way to prove it.
+        """
+
+        if not isinstance(raw_headers, list):
+            return False
+        combined = " ; ".join(
+            re.sub(r"\s+", " ", str(item.get("value") or "").strip().casefold())
+            for item in raw_headers
+            if isinstance(item, dict)
+            and str(item.get("name") or "").strip().casefold()
+            in {"authentication-results", "arc-authentication-results"}
+        )
+        if not combined or re.search(r"dmarc\s*=\s*fail", combined):
+            return False
+        return bool(
+            re.search(r"dmarc\s*=\s*(?:temperror|permerror|none)", combined)
+        )
+
+    def _allowed_sender_domains(self) -> set[str]:
+        return {
+            hint.strip().casefold().lstrip("@")
+            for hint in self.config.sender_hints
+            if re.fullmatch(r"@?[a-z0-9.-]+\.[a-z]{2,}", hint.strip().casefold())
+        }
+
+    def _address_domain_allowed(self, message: dict[str, Any]) -> bool:
+        """True when the From address itself is one of the provider's domains."""
+
+        sender = message.get("from")
+        address = ""
+        if isinstance(sender, dict):
+            email = sender.get("emailAddress")
+            if isinstance(email, dict):
+                address = str(email.get("address") or "")
+        normalized = address.strip().casefold()
+        if "@" not in normalized:
+            return False
+        domain = normalized.rsplit("@", 1)[-1]
+        return any(
+            domain == allowed or domain.endswith("." + allowed)
+            for allowed in self._allowed_sender_domains()
         )
 
     def _message_matches(self, message: dict[str, Any], target_month: str) -> bool:
@@ -210,17 +284,41 @@ class TokutenGraphFetcher:
         combined = " ; ".join(authentication_results)
         if re.search(r"\bdmarc\s*=\s*(?:fail|temperror|permerror)\b", combined):
             return False
-        for value in authentication_results:
-            if not re.search(r"\bdmarc\s*=\s*pass\b", value):
-                continue
+        def declares_provider(value: str) -> bool:
             match = re.search(
                 r"\bheader\.from\s*=\s*<?@?([a-z0-9.-]+\.[a-z]{2,})>?",
                 value,
             )
             authenticated_domain = match.group(1).rstrip(".") if match else ""
-            if any(
+            return any(
                 authenticated_domain == domain
                 or authenticated_domain.endswith("." + domain)
+                for domain in allowed_domains
+            )
+
+        for value in authentication_results:
+            if re.search(r"\bdmarc\s*=\s*pass\b", value) and declares_provider(value):
+                return True
+        for value in authentication_results:
+            # "dmarc=none" is not a failure: it means the domain had published
+            # no policy to evaluate. This provider only published one partway
+            # through the year, so every invoice before that was refused and
+            # those months could not be acquired at all.
+            #
+            # DKIM is the cryptographic proof the mail is theirs, so it is
+            # accepted when it verifies and the envelope agrees with the From.
+            if not re.search(r"\bdmarc\s*=\s*none\b", value):
+                continue
+            if not re.search(r"\bdkim\s*=\s*pass\b", value):
+                continue
+            if not declares_provider(value):
+                continue
+            envelope = re.search(
+                r"\bsmtp\.mailfrom\s*=\s*<?@?([a-z0-9.-]+\.[a-z]{2,})>?", value
+            )
+            envelope_domain = envelope.group(1).rstrip(".") if envelope else ""
+            if any(
+                envelope_domain == domain or envelope_domain.endswith("." + domain)
                 for domain in allowed_domains
             ):
                 return True

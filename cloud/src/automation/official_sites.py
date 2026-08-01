@@ -59,6 +59,9 @@ SERVICE_AUTOMATION_CONFIGS: dict[str, ServiceAutomationConfig] = {
         # envelope sender, so matching on it rejected every real invoice.
         sender_hints=(
             "flat-energy-co.jp",
+            # The same company's other domain: the earlier invoices came from
+            # info@flat-energy.jp, and without it those months were refused.
+            "flat-energy.jp",
             "besender-s.jp",
             "トクテンでんき 総合サポートセンター",
         ),

@@ -280,3 +280,76 @@ class ProductionSenderShapeTest(unittest.TestCase):
         )
         with self.assertRaises(AcquisitionError):
             fetcher.fetch_pdf("2026-07")
+
+
+class SenderAuthenticationTest(unittest.TestCase):
+    """Taken from the real headers on this mailbox's invoices.
+
+    The provider published no DMARC policy until partway through the year, so
+    demanding dmarc=pass refused every invoice before that and those months
+    could not be acquired at all.
+    """
+
+    def _passes(self, value: str) -> bool:
+        from src.automation.microsoft_graph import TokutenGraphFetcher
+
+        fetcher = TokutenGraphFetcher(lambda: "token")
+        return fetcher._sender_authentication_passes(
+            [{"name": "Authentication-Results", "value": value}]
+        )
+
+    def test_dmarc_pass_is_accepted(self) -> None:
+        self.assertTrue(self._passes(
+            "spf=pass (sender IP is 52.199.24.150) smtp.mailfrom=besender-s.jp; "
+            "dkim=pass (signature was verified) header.d=flat-energy-co.jp;"
+            "dmarc=pass action=none header.from=flat-energy-co.jp;compauth=pass"
+        ))
+
+    def test_no_published_policy_is_accepted_when_dkim_proves_the_sender(self) -> None:
+        """dmarc=none means there was no policy to evaluate, not a failure."""
+
+        self.assertTrue(self._passes(
+            "spf=none (sender IP is 209.85.161.49) smtp.mailfrom=flat-energy-co.jp; "
+            "dkim=pass (signature was verified) "
+            "header.d=flat-energy-co-jp.20230601.gappssmtp.com;"
+            "dmarc=none action=none header.from=flat-energy-co.jp"
+        ))
+
+    def test_the_providers_other_domain_is_accepted(self) -> None:
+        """The earliest invoices came from flat-energy.jp, not flat-energy-co.jp."""
+
+        self.assertTrue(self._passes(
+            "spf=none (sender IP is 209.85.219.41) smtp.mailfrom=flat-energy.jp; "
+            "dkim=pass (signature was verified) "
+            "header.d=flat-energy-jp.20230601.gappssmtp.com;"
+            "dmarc=none action=none header.from=flat-energy.jp;"
+        ))
+
+    def test_no_policy_and_no_dkim_is_refused(self) -> None:
+        self.assertFalse(self._passes(
+            "spf=none smtp.mailfrom=flat-energy-co.jp; dkim=none;"
+            "dmarc=none action=none header.from=flat-energy-co.jp"
+        ))
+
+    def test_a_forged_from_is_refused(self) -> None:
+        """Someone else's DKIM does not authenticate this provider's name."""
+
+        self.assertFalse(self._passes(
+            "spf=none smtp.mailfrom=evil.example; dkim=pass header.d=evil.example;"
+            "dmarc=none action=none header.from=flat-energy-co.jp"
+        ))
+
+    def test_an_undetermined_result_is_refused(self) -> None:
+        """dkim=timeout leaves nothing proving the mail is theirs."""
+
+        self.assertFalse(self._passes(
+            "spf=pass (sender IP is 54.150.252.82) smtp.mailfrom=besender-s.jp; "
+            "dkim=timeout (key query timeout) header.d=flat-energy-co.jp;"
+            "dmarc=temperror action=none header.from=flat-energy-co.jp;"
+        ))
+
+    def test_an_outright_failure_is_refused(self) -> None:
+        self.assertFalse(self._passes(
+            "spf=fail smtp.mailfrom=flat-energy-co.jp; dkim=fail;"
+            "dmarc=fail action=oreject header.from=flat-energy-co.jp"
+        ))
