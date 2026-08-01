@@ -628,6 +628,41 @@ class StreamlitAppTest(unittest.TestCase):
         self.assertIn("Google Driveを接続し直す", markdown)
         self.assertTrue(any("承認後のURL" in str(item.label) for item in app.text_input))
 
+    def test_a_stale_reconnect_module_is_reloaded_before_it_is_called(self) -> None:
+        """This card is only ever reached when Drive is already down.
+
+        A deploy can leave the previous version of it in sys.modules, and a
+        crash here would take away the one screen that exists to recover.
+        """
+
+        import src.ui.google_link as google_link_module
+
+        app = self._app_with_encryption_key()
+        google_link_module.UI_API_VERSION = 1
+        stale = google_link_module.render_google_reconnect
+
+        def old_signature(st_module, secrets):  # no "remember" parameter
+            raise AssertionError("the stale module was called")
+
+        google_link_module.render_google_reconnect = old_signature
+        try:
+            with (
+                patch.object(DriveStorage, "from_secrets", side_effect=self._drive_dead()),
+                patch("src.storage.drive_storage.build_drive_service", return_value=MagicMock()),
+                patch(
+                    "src.storage.google_credential_store.GoogleCredentialStore.load",
+                    return_value="",
+                ),
+            ):
+                app.run(timeout=20)
+        finally:
+            google_link_module.render_google_reconnect = stale
+            importlib.reload(google_link_module)
+
+        self.assertEqual([], list(app.exception))
+        markdown = chr(10).join(item.value for item in app.markdown)
+        self.assertIn("Google Driveを接続し直す", markdown)
+
     def test_a_puzzle_holds_the_browser_open_instead_of_ending_the_job(self) -> None:
         """Epos guards its sign-in with a slide puzzle.
 

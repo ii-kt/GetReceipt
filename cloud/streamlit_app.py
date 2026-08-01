@@ -43,7 +43,7 @@ from src.storage.browser_profile_store import BrowserProfileStore
 from src.storage.drive_storage import DriveStorage
 from src.ui import remote_jobs
 from src.ui.access_control import require_owner_access
-from src.ui.google_link import render_google_reconnect
+from src.ui import google_link
 from src.ui.graph_link import graph_manager_from_secrets, render_graph_connection
 from src.ui import live_view
 from src.ui.manual_upload import render_manual_upload
@@ -96,6 +96,7 @@ LOGGER = logging.getLogger(__name__)
 MONTHLY_VIEW = "毎月の4件"
 ARCHIVE_VIEW = "単発領収書"
 EXPECTED_UI_API_VERSION = 2
+EXPECTED_GOOGLE_LINK_API_VERSION = 2
 REQUIRED_UI_CALLABLES = (
     "inject_design",
     "render_compact_header",
@@ -114,6 +115,13 @@ ui_styles = ensure_ui_module(
     ui_styles,
     expected_version=EXPECTED_UI_API_VERSION,
     required_callables=REQUIRED_UI_CALLABLES,
+)
+# The reconnection card is reached only when Drive is already down, so a stale
+# copy of it would crash the one screen that exists to recover from that.
+google_link = ensure_ui_module(
+    google_link,
+    expected_version=EXPECTED_GOOGLE_LINK_API_VERSION,
+    required_callables=("render_google_reconnect",),
 )
 
 
@@ -1353,7 +1361,9 @@ def render_monthly_view(
         # The credential can only be replaced by hand, but it must at least be
         # replaceable from the phone rather than from a desktop script.
         if _drive_credential_expired(drive_error):
-            render_google_reconnect(st, st.secrets, remember=remember_drive_credential)
+            google_link.render_google_reconnect(
+                st, st.secrets, remember=remember_drive_credential
+            )
         st.stop()
 
     receipts = receipts_for_month(drive_files, selected_month)
@@ -1710,7 +1720,9 @@ def render_archive_view(drive_files: list[dict[str, str]], drive_error: str) -> 
         # The credential can only be replaced by hand, but it must at least be
         # replaceable from the phone rather than from a desktop script.
         if _drive_credential_expired(drive_error):
-            render_google_reconnect(st, st.secrets, remember=remember_drive_credential)
+            google_link.render_google_reconnect(
+                st, st.secrets, remember=remember_drive_credential
+            )
         st.stop()
 
     archive: ReceiptArchive = build_receipt_archive(drive_files)

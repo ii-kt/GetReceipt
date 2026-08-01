@@ -25,8 +25,13 @@ import urllib.request
 from typing import Any
 
 
-__all__ = ["GOOGLE_DRIVE_SCOPE", "authorization_url", "extract_code", "exchange_code",
-           "render_google_reconnect"]
+__all__ = ["GOOGLE_DRIVE_SCOPE", "UI_API_VERSION", "authorization_url", "extract_code",
+           "exchange_code", "render_google_reconnect"]
+
+# Streamlit Cloud can rerun a freshly deployed entrypoint against modules the
+# previous deploy left in sys.modules. Bump this whenever this module's shape
+# changes, so the entrypoint reloads it instead of calling the old one.
+UI_API_VERSION = 2
 
 
 AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
