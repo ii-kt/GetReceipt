@@ -322,3 +322,27 @@ class WebBillingSplitCodePageTest(unittest.TestCase):
         self.assertTrue(
             callable(getattr(WebBillingAutoFetcher, "resume_after_security_code", None))
         )
+
+
+class WebBillingCertificateMenuTest(unittest.TestCase):
+    """The certificate entry sits beside the invoice ones in the same menu.
+
+    Reproduced from the live page: judging a control by the text around it
+    meant the words that rule out 適格請求書 and インボイス制度 also ruled out the
+    entry being looked for, and every sign-in ended there.
+    """
+
+    def setUp(self) -> None:
+        from src.automation.official_sites import build_webbilling_step_expression
+
+        self.script = build_webbilling_step_expression(2026, 7)
+
+    def test_the_entry_is_judged_on_its_own_label(self) -> None:
+        self.assertIn("const own = normalize(labelOf(el));", self.script)
+        self.assertIn("own.includes(normalize(word))", self.script)
+
+    def test_the_invoice_entries_are_still_ruled_out(self) -> None:
+        self.assertIn('["適格", "インボイス", "ログアウト"]', self.script)
+
+    def test_both_certificate_wordings_are_accepted(self) -> None:
+        self.assertIn('["料金支払証明書", "ご利用料金証明書"]', self.script)

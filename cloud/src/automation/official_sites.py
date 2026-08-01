@@ -1867,7 +1867,25 @@ if (onCertificateList) {
   if (checkboxControl) return { ok: false, code: "CLICK_TARGET_CHECKBOX", click: pointOf(checkboxControl), waitMs: 900, metadataText, logs: ["Webビリングの対象請求年月にチェックを入れます。"] };
   return { ok: false, code: "NEXT_BUTTON_NOT_FOUND", message: "Webビリングの対象月チェック後も次へボタンが有効になりませんでした。", advice: "対象月行のチェック状態が反映されているか確認してください。", metadataText, logs };
 }
-const certificateMenu = bestControl(["料金支払証明書", "ご利用料金証明書"], ["適格", "インボイス", "ログアウト"]);
+// Judged on the control's own label only. bestControl weighs the surrounding
+// text too, and in the left menu this entry sits directly beside 適格請求書 and
+// インボイス制度のご案内 - so the words meant to rule those out were rejecting
+// the very entry being looked for, and the sign-in ended here every time.
+const certificateMenu = controls()
+  .map((el) => {
+    const own = normalize(labelOf(el));
+    if (!own) return null;
+    if (["適格", "インボイス", "ログアウト"].some((word) => own.includes(normalize(word)))) return null;
+    let score = 0;
+    for (const word of ["料金支払証明書", "ご利用料金証明書"]) {
+      const key = normalize(word);
+      if (own === key) score += 500;
+      else if (own.includes(key)) score += 250;
+    }
+    return score > 0 ? { el, label: labelOf(el), score } : null;
+  })
+  .filter(Boolean)
+  .sort((a, b) => b.score - a.score || a.label.length - b.label.length)[0];
 if (certificateMenu) return { ok: false, code: "CLICK_CERTIFICATE_MENU", click: pointOf(certificateMenu.el), waitMs: 1600, logs: ["料金支払証明書・ご利用料金証明書を開きます: " + certificateMenu.label.trim().slice(0, 120)] };
 const search = bestControl(["検索"], ["ログアウト"]);
 if (String(location.href).includes("/mem/c0301/") && search) return { ok: false, code: "CLICK_SEARCH", click: pointOf(search.el), waitMs: 1000, logs: ["Webビリングの証明書検索を押します。"] };
