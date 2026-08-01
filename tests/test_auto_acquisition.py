@@ -316,5 +316,47 @@ class AutoAcquisitionTest(unittest.TestCase):
         self.assertEqual([], storage.upserts)
 
 
+class NotIssuedMonthTest(unittest.TestCase):
+    """An unbilled month must not be dressed up as a breakage."""
+
+    class _NotIssuedYet(RuntimeError):
+        code = "TOKUTEN_GRAPH_ATTACHMENT_NOT_FOUND"
+        advice = "請求が確定して添付PDFが届いてから再実行してください。"
+
+    def test_the_providers_own_wording_is_the_whole_message(self) -> None:
+        error = self._NotIssuedYet(
+            "トクテンでんきの2026年8月分の請求メールがまだ見つかりません。"
+        )
+
+        result = run_auto_acquisition(
+            service_id="tokuten",
+            target_month="2026-07",
+            fetcher=FakeFetcher(error=error),
+            storage=FakeStorage([]),
+        )
+
+        self.assertFalse(result.success)
+        self.assertEqual("TOKUTEN_GRAPH_ATTACHMENT_NOT_FOUND", result.failure.code)
+        self.assertEqual(
+            "トクテンでんきの2026年8月分の請求メールがまだ見つかりません。",
+            result.failure.message,
+        )
+        # No generic failure lead-in and no exception class name.
+        self.assertNotIn("失敗", result.failure.message)
+        self.assertNotIn("AcquisitionError", result.failure.detail)
+        self.assertEqual(error.advice, result.failure.detail)
+
+    def test_a_real_breakage_still_reads_as_a_failure(self) -> None:
+        result = run_auto_acquisition(
+            service_id="tokuten",
+            target_month="2026-07",
+            fetcher=FakeFetcher(error=FakeFetchError("ログインできません")),
+            storage=FakeStorage([]),
+        )
+
+        self.assertEqual("PDFの自動取得に失敗しました。", result.failure.message)
+        self.assertIn("FakeFetchError", result.failure.detail)
+
+
 if __name__ == "__main__":
     unittest.main()

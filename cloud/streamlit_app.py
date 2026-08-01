@@ -47,7 +47,7 @@ from src.ui import live_view
 from src.ui.manual_upload import render_manual_upload
 from src.ui import styles as ui_styles
 from src.ui.module_contract import ensure_ui_module
-from src.workflows.auto_acquisition import run_auto_acquisition
+from src.workflows.auto_acquisition import NOT_ISSUED_CODES, run_auto_acquisition
 from src.workflows.drive_status import StoredReceipt, find_receipt
 from src.workflows.receipt_archive import (
     ReceiptArchive,
@@ -69,14 +69,9 @@ FAILURES_KEY = "getreceipt_service_failures"
 os.environ.setdefault("GETRECEIPT_ALLOW_CHROMIUM", "1")
 NOTICE_KEY = "getreceipt_notice"
 # Wi-Fi and electricity bill the month after use, so asking for the current
-# month before the provider has issued it is expected, not a fault.
-NOT_ISSUED_FAILURE_CODES = frozenset(
-    {
-        "COMMUFA_MONTH_NOT_ISSUED",
-        "ATTACHMENT_NOT_FOUND",
-        "MESSAGE_NOT_FOUND",
-    }
-)
+# month before the provider has issued it is expected, not a fault. The
+# workflow decides what counts; the card only has to render it.
+NOT_ISSUED_FAILURE_CODES = NOT_ISSUED_CODES
 SECURITY_CHALLENGE_KEY = "getreceipt_security_challenge"
 # Gates the owner has to work by hand on the provider's own page, because no
 # code can express them. The browser is held open and mirrored instead.

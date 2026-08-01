@@ -40,6 +40,18 @@ CancellationCheck = Callable[[], bool]
 _ACQUISITION_LOCK = Lock()
 LOGGER = logging.getLogger(__name__)
 
+# Wi-Fi and electricity bill the month after use, so during the current month
+# the statement simply does not exist yet. Every provider says so in its own
+# words; these are the codes that mean it.
+NOT_ISSUED_CODES = frozenset(
+    {
+        "COMMUFA_MONTH_NOT_ISSUED",
+        "TOKUTEN_GRAPH_ATTACHMENT_NOT_FOUND",
+        "ATTACHMENT_NOT_FOUND",
+        "MESSAGE_NOT_FOUND",
+    }
+)
+
 _ACTION_REQUIRED_CHALLENGE_KINDS = {
     "verification_code",
     "captcha",
@@ -209,8 +221,19 @@ def _run_auto_acquisition_unlocked(
         LOGGER.warning(
             "Acquisition fetch failed for %s (%s)", service_id, detail
         )
+        code = _error_code(error, "FETCH_FAILED")
+        if code in NOT_ISSUED_CODES:
+            # The provider has not billed this month yet. That is the ordinary
+            # state of the current month, not a fault, so its own wording is
+            # the whole message and nothing generic is put in front of it.
+            return failed(
+                code=code,
+                message=str(error) or "この月の請求はまだ発行されていません。",
+                stage=Stage.FETCHING,
+                detail=advice,
+            )
         return failed(
-            code=_error_code(error, "FETCH_FAILED"),
+            code=code,
             message="PDFの自動取得に失敗しました。",
             stage=Stage.FETCHING,
             detail=detail,

@@ -745,6 +745,16 @@ class StreamlitAppTest(unittest.TestCase):
                         detail="掲載済みの最新は2026年7月分です。",
                     ),
                 )
+            if kwargs["service_id"] == "tokuten":
+                return SimpleNamespace(
+                    success=False,
+                    file_name="",
+                    failure=SimpleNamespace(
+                        code="TOKUTEN_GRAPH_ATTACHMENT_NOT_FOUND",
+                        message="トクテンでんきの2026年8月分の請求メールがまだ見つかりません。",
+                        detail="請求が確定して添付PDFが届いてから再実行してください。",
+                    ),
+                )
             return SimpleNamespace(
                 success=False,
                 file_name="",
@@ -769,6 +779,15 @@ class StreamlitAppTest(unittest.TestCase):
         self.assertIn("gr-card--not_issued", commufa)
         self.assertIn("未発行", commufa)
         self.assertNotIn("COMMUFA_MONTH_NOT_ISSUED", commufa)
+        # The card reads as a status, not as something that went wrong.
+        self.assertNotIn("失敗", commufa)
+
+        # Electricity bills a month behind too, and must read the same way.
+        tokuten = next(c for c in cards if "フラットエナジー" in c)
+        self.assertIn("gr-card--not_issued", tokuten)
+        self.assertNotIn("TOKUTEN_GRAPH_ATTACHMENT_NOT_FOUND", tokuten)
+        self.assertNotIn("失敗", tokuten)
+
         # A genuine breakage still reads as a failure.
         self.assertIn("gr-card--failed", next(c for c in cards if "エポスカード" in c))
 
