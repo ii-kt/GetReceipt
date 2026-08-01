@@ -79,12 +79,15 @@ SECURITY_CHALLENGE_KEY = "getreceipt_security_challenge"
 # code can express them. The browser is held open and mirrored instead.
 INTERACTIVE_CHALLENGE_KINDS = frozenset({"captcha", "interactive"})
 PUZZLE_OPEN_KEY = "getreceipt_puzzle_open"
-# A refresh token issued by an unpublished OAuth consent screen expires after
-# seven days. Without naming that, the failure looks like a Drive outage.
+# Google lists only a handful of reasons a refresh token stops working, and
+# the app cannot tell which one applied. Naming the one that is actionable -
+# reissuing - beats sending the owner to change a setting that may already be
+# correct. The seven-day expiry only ever applies while the consent screen is
+# in Testing, so it is mentioned as a condition rather than as an instruction.
 DRIVE_CREDENTIAL_EXPIRED = (
-    "Googleの認証が失効しました。Google Cloudの「OAuth同意画面」を"
-    "本番公開にしたうえで、[google_oauth]のrefresh_tokenを"
-    "取り直してください。（テスト中のアプリは7日で失効します）"
+    "Googleの認証が失効しました。下から取り直してください。"
+    "（同意画面が「テスト」の間に発行した認証情報は7日で失効します。"
+    "「本番環境」で取り直せば期限切れは起きません）"
 )
 SECURITY_WAITING_PHASE = "awaiting_security_code"
 SECURITY_SUBMITTING_PHASE = "submitting_security_code"
