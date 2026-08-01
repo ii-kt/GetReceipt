@@ -221,22 +221,46 @@ class AuthChallengesTest(unittest.TestCase):
         self.assertEqual(AuthChallengeClassification.NONE, observation.classification)
 
     def test_submit_candidate_must_be_exactly_one(self) -> None:
+        """The button is judged after filling, not before.
+
+        A code page keeps its submit disabled until the code is complete, so
+        looking first found nothing and the submission was abandoned with the
+        code already in hand. The page itself reports the count back.
+        """
+
         for count in (0, 2):
             with self.subTest(count=count):
                 browser = FakeBrowser(
                     url="https://mypage.commufa.jp/join/s/",
                     evaluations=[
-                        {
-                            "classification": "code_input",
-                            "inputCount": 1,
-                            "submitCount": count,
-                        }
+                        {"classification": "code_input", "inputCount": 1, "submitCount": count},
+                        {"ok": False, "error": "SUBMIT_AMBIGUOUS", "submitCount": count},
                     ],
                 )
                 with self.assertRaises(AuthChallengeSubmissionError):
                     submit_current_auth_code(browser, "commufa", "123456")
-                self.assertEqual(1, len(browser.expressions))
                 self.assertNotIn("123456", browser.expressions[0])
+
+    def test_a_disabled_submit_does_not_stop_the_code_being_entered(self) -> None:
+        """Seen live on d-account: 次へ is disabled until six digits are in."""
+
+        browser = FakeBrowser(
+            url="https://cfg.smt.docomo.ne.jp/auth/cgi/anidlogin",
+            evaluations=[
+                {
+                    "classification": "code_input",
+                    "inputCount": 0,
+                    "splitCount": 6,
+                    "submitCount": 0,
+                },
+                {"ok": True, "classification": "code_input"},
+            ],
+        )
+
+        submit_current_auth_code(browser, "webbilling", "491601")
+
+        # It got as far as actually submitting, despite the pre-fill count.
+        self.assertEqual(2, len(browser.expressions))
 
     def test_success_uses_only_live_current_page_contract_and_never_echoes_code(self) -> None:
         code = "123456"

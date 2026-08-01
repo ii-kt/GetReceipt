@@ -297,8 +297,14 @@ class WebBillingSplitCodePageTest(unittest.TestCase):
             {"d_account_id": "owner@example.test", "password": "secret"}
         )
 
-    def test_a_run_of_one_character_boxes_counts_as_a_code_field(self) -> None:
-        self.assertIn('Number(input.getAttribute("maxlength") || 0) === 1', self.script)
+    def test_a_run_of_per_digit_boxes_counts_as_a_code_field(self) -> None:
+        """One box per digit does not mean maxlength is one.
+
+        Seen live on d-account: six boxes, every one of them maxlength="6".
+        Matching only maxlength=1 found none of them.
+        """
+
+        self.assertIn("max >= 1 && max <= 8", self.script)
         self.assertIn("splitCodeBoxes.length >= 4 && splitCodeBoxes.length <= 8", self.script)
 
     def test_the_code_page_asks_for_a_code_rather_than_hand_operation(self) -> None:

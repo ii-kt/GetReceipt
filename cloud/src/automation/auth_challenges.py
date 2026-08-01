@@ -236,10 +236,10 @@ def submit_current_auth_code(
         raise AuthChallengeSubmissionError(
             "追加認証コードの入力欄を一意に確認できませんでした。"
         )
-    if observation.submit_candidates != 1:
-        raise AuthChallengeSubmissionError(
-            "追加認証コードの送信ボタンを一意に確認できませんでした。"
-        )
+    # The submit control is deliberately not required here. A code page keeps
+    # it disabled until the code is complete, so before filling there is
+    # nothing to find; it is checked inside the submission, after the boxes
+    # have been filled.
 
     result = _safe_evaluate(
         browser,
@@ -432,11 +432,8 @@ const before = inspect();
 if (before.classification === "interactive" || before.classification === "unsupported") {{
   return {{ ok: false, classification: before.classification }};
 }}
-if (before.submitCount !== 1) return {{ ok: false, error: "SUBMIT_AMBIGUOUS" }};
 const inputs = codeInputs();
-const submits = submitControls();
 const boxes = splitCodeBoxes();
-if (submits.length !== 1) return {{ ok: false, error: "SUBMIT_AMBIGUOUS" }};
 const value = {payload};
 const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
 const fill = (element, text) => {{
@@ -456,6 +453,12 @@ if (boxes.length) {{
   if (inputs.length !== 1) return {{ ok: false, error: "INPUT_AMBIGUOUS" }};
   fill(inputs[0], value);
 }}
+// Only now look for the button. A code page keeps its submit disabled until
+// the code is complete, and a disabled control is not one the owner could
+// press either - so searching before filling found nothing and the whole
+// submission was abandoned with the code already in hand.
+const submits = submitControls();
+if (submits.length !== 1) return {{ ok: false, error: "SUBMIT_AMBIGUOUS", submitCount: submits.length }};
 submits[0].click();
 return {{ ok: true, classification: "code_input" }};
 }})()"""
@@ -517,7 +520,12 @@ const typedInputs = () => [...document.querySelectorAll("input")]
 const splitCodeBoxes = () => {
   const boxes = typedInputs().filter((input) => {
     const max = Number(input.getAttribute("maxlength") || 0);
-    return max === 1 || (max === 0 && String(input.className || "").toLowerCase().includes("digit"));
+    // One box per digit does not mean maxlength is one: d-account sets the
+    // whole code length on every box. Anything up to a code's length counts,
+    // and it is the number of identical unlabelled boxes that identifies the
+    // layout, not the attribute.
+    if (max >= 1 && max <= profile.maxLength) return true;
+    return max === 0 && String(input.className || "").toLowerCase().includes("digit");
   });
   return boxes.length >= profile.minLength && boxes.length <= profile.maxLength ? boxes : [];
 };

@@ -765,21 +765,20 @@ class WebBillingAutoFetcher:
         self._credential_submission_attempted = False
 
     def _navigation_credentials(self) -> dict[str, str]:
-        """Credentials for the login script, minus what it no longer needs.
+        """Credentials for the login script.
 
-        The script keeps running after the password has gone, because it is
-        what walks the portal on to the d-account page. It cannot send the
-        password a second time, so carrying it into the page on every poll -
-        a hundred times over a two minute wait - achieves nothing.
+        These stay complete for the whole attempt. Withholding the password
+        after the first submission looked like it would stop it being pushed
+        into the page on every poll, but the sign-in walks several pages: the
+        script needs it again on whichever page actually carries the field,
+        and without it that page reported the password as unconfigured.
+
+        Re-filling is avoided in the script instead, by leaving a field alone
+        once it already holds a value, and the one-submission guard is what
+        keeps the password from being sent twice.
         """
 
-        if not self._credential_submission_attempted:
-            return self.credentials
-        return {
-            key: value
-            for key, value in self.credentials.items()
-            if key != "password"
-        }
+        return self.credentials
 
     def open_portal(self) -> dict[str, Any]:
         self.browser.navigate(self.config.target_url, wait_seconds=1.5)
@@ -1635,7 +1634,7 @@ const exactSecurityOrigin = location.protocol === "https:" && ["webbilling.ntt-f
 const splitCodeBoxes = [...document.querySelectorAll("input")]
   .filter(visible)
   .filter((input) => ["text", "tel", "number", "password"].includes(String(input.type || "text").toLowerCase()))
-  .filter((input) => Number(input.getAttribute("maxlength") || 0) === 1);
+  .filter((input) => { const max = Number(input.getAttribute("maxlength") || 0); return max >= 1 && max <= 8; });
 const codeFieldPresent = codeInputs.length === 1 || (splitCodeBoxes.length >= 4 && splitCodeBoxes.length <= 8);
 if (codeFieldPresent && exactSecurityOrigin) return { attempted: false, waitingForSecurityCode: true, code: "WAIT_SECURITY_CODE", challengeKind: "verification_code", splitCount: splitCodeBoxes.length, reason: "セキュリティコード入力待ちです。" };
 if (securityWords.some((word) => pageText.includes(normalize(word)))) {
@@ -1664,8 +1663,16 @@ if (dAccountLogin && (payload.prefersDAccount || !passwordInput) && !onDAccountH
   return { attempted: true, code: "CLICK_D_ACCOUNT_LOGIN", click: pointOf(dAccountLogin.el) };
 }
 if (passwordInput) {
-  if (!payload.password && !String(passwordInput.value || "").trim()) return { attempted: false, code: "PASSWORD_NOT_CONFIGURED", reason: "パスワードが未入力です。" };
-  if (payload.password) setValue(passwordInput, payload.password);
+  const passwordFilled = String(passwordInput.value || "").trim().length > 0;
+  if (!payload.password && !passwordFilled) return { attempted: false, code: "PASSWORD_NOT_CONFIGURED", reason: "パスワードが未入力です。" };
+  // Filling and submitting in one pass is what made this hang: d-account
+  // commits a field on its own render, so the click landed before the value
+  // was taken and the sign-in was submitted empty. The page then sat there,
+  // no code was ever sent, and the wait ran out in silence.
+  if (payload.password && !passwordFilled) {
+    setValue(passwordInput, payload.password);
+    return { attempted: true, filled: true, code: "FILL_PASSWORD", waitMs: 700, reason: "パスワードを入力しました。" };
+  }
   const loginButton = bestControl(["ログイン", "login"], ["戻る", "キャンセル", "お忘れ", "新規", "登録", "表示"]);
   if (!loginButton) return { attempted: false, code: "LOGIN_BUTTON_NOT_FOUND", reason: "ログインボタンを見つけられませんでした。" };
   return { attempted: true, code: "SUBMIT_PASSWORD", click: pointOf(loginButton.el) };
@@ -1688,8 +1695,15 @@ const idInput = textInputs
   .filter((item) => item.score > 0)
   .sort((a, b) => b.score - a.score)[0]?.input || textInputs[0];
 if (idInput) {
-  if (!payload.dAccountId && !String(idInput.value || "").trim()) return { attempted: false, code: "D_ACCOUNT_ID_NOT_CONFIGURED", reason: "dアカウントIDが未入力です。" };
-  if (payload.dAccountId) setValue(idInput, payload.dAccountId);
+  const idFilled = String(idInput.value || "").trim().length > 0;
+  if (!payload.dAccountId && !idFilled) return { attempted: false, code: "D_ACCOUNT_ID_NOT_CONFIGURED", reason: "dアカウントIDが未入力です。" };
+  // Same reason as the password: d-account enables its own button on the
+  // render after the value lands, so submitting in the same pass presses a
+  // button that is still disabled and nothing moves.
+  if (payload.dAccountId && !idFilled) {
+    setValue(idInput, payload.dAccountId);
+    return { attempted: true, filled: true, code: "FILL_D_ACCOUNT_ID", waitMs: 700, reason: "dアカウントIDを入力しました。" };
+  }
   const nextButton = bestControl(["次へ", "next"], ["戻る", "キャンセル", "お忘れ", "登録", "新規"]);
   if (!nextButton) return { attempted: false, code: "NEXT_BUTTON_NOT_READY", reason: "次へボタンの有効化を待っています。" };
   return { attempted: true, code: "SUBMIT_D_ACCOUNT_ID", click: pointOf(nextButton.el) };
