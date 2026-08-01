@@ -549,6 +549,11 @@ def fail_batch_service(
         message=message,
         detail=detail,
     )
+    if code in NOT_ISSUED_FAILURE_CODES:
+        # The provider answered perfectly well; there is simply no bill yet.
+        # Counting that as a failed sign-in locked the service out of the
+        # session for a month where nothing was wrong.
+        clear_signin_attempts(service_id, target_month)
     return _advance_batch(batch)
 
 

@@ -815,6 +815,52 @@ class StreamlitAppTest(unittest.TestCase):
         counts = app.session_state["getreceipt_signin_attempts"]
         self.assertEqual({}, {k: v for k, v in counts.items() if v})
 
+    def test_an_unbilled_month_does_not_count_against_the_sign_in_cap(self) -> None:
+        """The provider answered fine; there is simply no bill yet.
+
+        Counting that as a failed sign-in locked the service out of the
+        session for a month where nothing was wrong.
+        """
+
+        storage = FakeDriveStorage([])
+        attempts: list[str] = []
+
+        def acquire(**kwargs):
+            attempts.append(kwargs["service_id"])
+            return SimpleNamespace(
+                success=False,
+                action_required=False,
+                file_name="",
+                failure=SimpleNamespace(
+                    code="COMMUFA_MONTH_NOT_ISSUED",
+                    message="まだ掲載されていません。",
+                    detail="請求が確定してから再実行してください。",
+                ),
+            )
+
+        app = self.app()
+        with (
+            patch.object(DriveStorage, "from_secrets", return_value=storage),
+            patch("src.automation.browser_session.ManagedBrowser"),
+            patch("src.automation.providers.build_receipt_fetcher", return_value=object()),
+            patch("src.workflows.auto_acquisition.run_auto_acquisition", side_effect=acquire),
+            patch("src.storage.status_store.ServiceStatusStore.load", return_value={}),
+            patch("src.storage.status_store.ServiceStatusStore.record"),
+            patch("src.storage.status_store.ServiceStatusStore.clear"),
+        ):
+            app.run(timeout=20)
+            for _ in range(4):
+                buttons = [b for b in app.button if "自動取得" in b.label]
+                if not buttons:
+                    break
+                buttons[0].click().run(timeout=60)
+
+        # It keeps being tried, and never reports the cap.
+        self.assertGreater(attempts.count("commufa"), 2)
+        markdown = chr(10).join(item.value for item in app.markdown)
+        self.assertNotIn("SIGNIN_ATTEMPT_LIMIT", markdown)
+        self.assertEqual([], list(app.exception))
+
     def test_a_puzzle_holds_the_browser_open_instead_of_ending_the_job(self) -> None:
         """Epos guards its sign-in with a slide puzzle.
 
