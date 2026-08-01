@@ -180,12 +180,20 @@ def inject_design() -> None:
           box-shadow: none !important;
         }
 
+        /* Streamlit marks the chosen segment with its own kind attribute, not
+           with aria-checked. The aria selectors are kept so a future version
+           that does use them still shows the selection. */
+        [data-testid="stButtonGroup"] button[kind$="Active"],
+        [data-testid="stButtonGroup"] button[data-testid$="Active"],
         [data-testid="stButtonGroup"] button[aria-checked="true"],
         [data-testid="stButtonGroup"] button[aria-pressed="true"],
+        [data-testid="stSegmentedControl"] button[kind$="Active"],
+        [data-testid="stSegmentedControl"] button[data-testid$="Active"],
         [data-testid="stSegmentedControl"] button[aria-checked="true"],
         [data-testid="stSegmentedControl"] button[aria-pressed="true"] {
           color: #fff !important;
           background: var(--gr-ink) !important;
+          box-shadow: 0 1px 2px rgba(23,25,20,.18) !important;
         }
 
         [data-testid="stTextInput"] {
