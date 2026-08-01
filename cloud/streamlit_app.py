@@ -80,6 +80,11 @@ SECURITY_CHALLENGE_KEY = "getreceipt_security_challenge"
 # code can express them. The browser is held open and mirrored instead.
 INTERACTIVE_CHALLENGE_KINDS = frozenset({"captcha", "interactive"})
 PUZZLE_OPEN_KEY = "getreceipt_puzzle_open"
+SIGNIN_ATTEMPTS_KEY = "getreceipt_signin_attempts"
+# Every browser sign-in makes the provider mail or text a fresh verification
+# code. Two is enough to survive one bad attempt; beyond that the owner is
+# just being spammed, and repeated sign-ins are what risks an account lock.
+MAX_SIGNIN_ATTEMPTS = 2
 # Google lists only a handful of reasons a refresh token stops working, and
 # the app cannot tell which one applied. Naming the one that is actionable -
 # reissuing - beats sending the owner to change a setting that may already be
@@ -846,6 +851,29 @@ def execute_next_service(storage: DriveStorage, batch: dict[str, Any]) -> None:
                 )
                 return
 
+    # Signing in again means another verification code to the owner's phone or
+    # mailbox. Stop before sending a third one and say so, rather than looking
+    # like the app is stuck in a loop.
+    if signin_attempts(service_id, target_month) >= MAX_SIGNIN_ATTEMPTS:
+        batch_complete = fail_batch_service(
+            batch,
+            service_id,
+            code="SIGNIN_ATTEMPT_LIMIT",
+            message=(
+                f"{service.label}のログインを{MAX_SIGNIN_ATTEMPTS}回試したので中止しました。"
+            ),
+            detail=(
+                "これ以上続けると確認コードが何度も届き、アカウントのロックにも"
+                "つながります。しばらく置いてから、もう一度実行してください。"
+            ),
+        )
+        status_box.update(
+            label=f"{service.label}のログインを中止しました。",
+            state="error",
+        )
+        st.rerun()
+    record_signin_attempt(service_id, target_month)
+
     run_dir = challenge_runtime.new_attempt_run_dir(service_id, target_month)
     browser: ManagedBrowser | None = None
     result = None
@@ -1054,13 +1082,10 @@ def resume_security_code(
                 fetch_statement=fetch_statement,
             )
     except challenge_runtime.BrowserLeaseUnavailableError:
-        st.session_state.pop(SECURITY_CHALLENGE_KEY, None)
-        batch["phase"] = "running"
-        st.session_state[BATCH_KEY] = batch
-        st.session_state[NOTICE_KEY] = (
-            "確認コード待機セッションの期限が切れたため、新しい確認コードを発行します。"
-        )
-        status_box.update(label="新しい確認コードを発行します。", state="running")
+        # Signing in again would mail another code. Leave the decision to the
+        # owner instead of doing it for them.
+        status_box.update(label=f"{service.label}の待機時間が切れました。", state="error")
+        st.session_state[SECURITY_CHALLENGE_KEY] = {**challenge, "token": ""}
         st.rerun()
     except Exception as error:
         unexpected_error = (
@@ -1166,6 +1191,61 @@ def resume_security_code(
     st.rerun()
 
 
+def signin_attempts(service_id: str, target_month: str) -> int:
+    counts = st.session_state.get(SIGNIN_ATTEMPTS_KEY, {})
+    return int(counts.get(f"{service_id}:{target_month}", 0)) if isinstance(counts, dict) else 0
+
+
+def record_signin_attempt(service_id: str, target_month: str) -> int:
+    """Count one browser sign-in, which is one verification code to the owner."""
+
+    counts = dict(st.session_state.get(SIGNIN_ATTEMPTS_KEY, {}) or {})
+    key = f"{service_id}:{target_month}"
+    counts[key] = int(counts.get(key, 0)) + 1
+    st.session_state[SIGNIN_ATTEMPTS_KEY] = counts
+    return counts[key]
+
+
+def clear_signin_attempts(service_id: str, target_month: str) -> None:
+    counts = dict(st.session_state.get(SIGNIN_ATTEMPTS_KEY, {}) or {})
+    counts.pop(f"{service_id}:{target_month}", None)
+    st.session_state[SIGNIN_ATTEMPTS_KEY] = counts
+
+
+def offer_expired_challenge_restart(
+    batch: dict[str, Any],
+    challenge: dict[str, Any],
+    service: Any,
+) -> None:
+    """Say the wait ran out, and let the owner decide about another code."""
+
+    st.warning(
+        f"{service.label}の待機時間が切れました。"
+        "やり直すと確認コードがもう一通届きます。",
+        icon=":material/timer_off:",
+    )
+    columns = st.columns(2)
+    if columns[0].button(
+        "やり直す（コードが再送されます）",
+        use_container_width=True,
+        icon=":material/refresh:",
+    ):
+        restart_security_challenge(batch, challenge)
+    if columns[1].button("中止する", use_container_width=True, type="primary"):
+        token = str(challenge.get("token") or "")
+        if token:
+            challenge_runtime.browser_lease_registry.discard(token)
+        st.session_state.pop(SECURITY_CHALLENGE_KEY, None)
+        fail_batch_service(
+            batch,
+            str(challenge.get("service_id") or ""),
+            code="SECURITY_CODE_TIMEOUT",
+            message=f"{service.label}の確認コード待機を中止しました。",
+            detail="時間をおいて、もう一度実行してください。",
+        )
+        st.rerun()
+
+
 def restart_security_challenge(batch: dict[str, Any], challenge: dict[str, Any]) -> None:
     token = str(challenge.get("token") or "")
     if token:
@@ -1189,13 +1269,10 @@ def render_security_code_form(
     try:
         metadata = challenge_runtime.browser_lease_registry.metadata(token)
     except challenge_runtime.BrowserLeaseUnavailableError:
-        st.session_state.pop(SECURITY_CHALLENGE_KEY, None)
-        batch["phase"] = "running"
-        st.session_state[BATCH_KEY] = batch
-        st.session_state[NOTICE_KEY] = (
-            "確認コード待機セッションの期限が切れたため、新しい確認コードを発行します。"
-        )
-        st.rerun()
+        # Restarting means signing in again, which mails another code. That is
+        # the owner's call, not something to do silently while they are away.
+        offer_expired_challenge_restart(batch, challenge, service)
+        return
 
     if metadata.service_id != service_id or metadata.target_month != target_month:
         restart_security_challenge(batch, challenge)

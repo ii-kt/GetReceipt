@@ -663,6 +663,48 @@ class StreamlitAppTest(unittest.TestCase):
         markdown = chr(10).join(item.value for item in app.markdown)
         self.assertIn("Google Driveを接続し直す", markdown)
 
+    def test_sign_ins_are_capped_so_codes_stop_arriving(self) -> None:
+        """Each browser sign-in mails the owner another verification code.
+
+        Nothing may keep signing in on its own: it spams the owner and
+        repeated sign-ins are what risks an account lock.
+        """
+
+        storage = FakeDriveStorage([])
+        attempts: list[str] = []
+
+        def acquire(**kwargs):
+            attempts.append(kwargs["service_id"])
+            return SimpleNamespace(
+                success=False,
+                action_required=False,
+                file_name="",
+                failure=SimpleNamespace(
+                    code="LOGIN_TIMEOUT", message="ログインできませんでした。", detail=""
+                ),
+            )
+
+        app = self.app()
+        with (
+            patch.object(DriveStorage, "from_secrets", return_value=storage),
+            patch("src.automation.browser_session.ManagedBrowser"),
+            patch("src.automation.providers.build_receipt_fetcher", return_value=object()),
+            patch("src.workflows.auto_acquisition.run_auto_acquisition", side_effect=acquire),
+        ):
+            app.run(timeout=20)
+            for _ in range(4):
+                buttons = [b for b in app.button if "自動取得" in b.label]
+                if not buttons:
+                    break
+                buttons[0].click().run(timeout=60)
+
+        commufa_signins = attempts.count("commufa")
+        self.assertGreater(commufa_signins, 0)
+        self.assertLessEqual(commufa_signins, 2)
+        markdown = chr(10).join(item.value for item in app.markdown)
+        self.assertIn("中止しました", markdown)
+        self.assertEqual([], list(app.exception))
+
     def test_a_puzzle_holds_the_browser_open_instead_of_ending_the_job(self) -> None:
         """Epos guards its sign-in with a slide puzzle.
 
