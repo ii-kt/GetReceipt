@@ -33,8 +33,13 @@ AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
 # Any localhost address is accepted by a desktop client. Nothing listens on
-# the phone, which is the point: the browser stops and shows the code.
-REDIRECT_URI = "http://localhost:1/"
+# the phone, which is the point: the browser stops on a connection error with
+# the code still in its address bar, ready to be copied.
+#
+# The port matters. Browsers refuse a whole list of low ports outright, and on
+# one of those the phone sits on a blank loading page forever instead of
+# failing. 8080 is an ordinary port, so the refusal is immediate and visible.
+REDIRECT_URI = "http://localhost:8080/"
 _CODE = re.compile(r"^[\x20-\x7E]{10,2048}$")
 
 
@@ -115,11 +120,12 @@ def render_google_reconnect(st: Any, secrets: Any) -> None:
 
     with st.container(border=True):
         st.markdown("**Google Driveを接続し直す**")
-        st.caption(
-            "1. 下のボタンでGoogleの許可画面を開き、承認します。"
-            "2. 承認後は「このサイトにアクセスできません」と表示されます。"
-            "それで正常です。3. その画面のアドレスバーのURLをすべてコピーし、"
-            "下の欄に貼り付けてください。"
+        st.markdown(
+            "1. 下のボタンを押し、Googleの画面で **「続行」→「許可」**\n"
+            "2. その後 **「このサイトにアクセスできません」** と出ます。"
+            "**これで成功です**\n"
+            "3. その画面の**アドレスバーをタップして全文をコピー**\n"
+            "4. 下の欄に貼り付けて「新しい接続情報を発行」"
         )
         st.link_button(
             "Googleの許可画面を開く",
@@ -128,9 +134,9 @@ def render_google_reconnect(st: Any, secrets: Any) -> None:
             type="primary",
         )
         pasted = st.text_input(
-            "承認後のURL",
+            "承認後のURL（localhost:8080 で始まるもの）",
             key="google_reconnect_url",
-            placeholder="http://localhost:1/?code=...",
+            placeholder="http://localhost:8080/?code=...",
         )
         if not st.button("新しい接続情報を発行", use_container_width=True):
             return
