@@ -42,6 +42,7 @@ from src.storage.browser_profile_store import BrowserProfileStore
 from src.storage.drive_storage import DriveStorage
 from src.ui import remote_jobs
 from src.ui.access_control import require_owner_access
+from src.ui.google_link import render_google_reconnect
 from src.ui.graph_link import graph_manager_from_secrets, render_graph_connection
 from src.ui import live_view
 from src.ui.manual_upload import render_manual_upload
@@ -78,6 +79,13 @@ SECURITY_CHALLENGE_KEY = "getreceipt_security_challenge"
 # code can express them. The browser is held open and mirrored instead.
 INTERACTIVE_CHALLENGE_KINDS = frozenset({"captcha", "interactive"})
 PUZZLE_OPEN_KEY = "getreceipt_puzzle_open"
+# A refresh token issued by an unpublished OAuth consent screen expires after
+# seven days. Without naming that, the failure looks like a Drive outage.
+DRIVE_CREDENTIAL_EXPIRED = (
+    "Googleの認証が失効しました。Google Cloudの「OAuth同意画面」を"
+    "本番公開にしたうえで、[google_oauth]のrefresh_tokenを"
+    "取り直してください。（テスト中のアプリは7日で失効します）"
+)
 SECURITY_WAITING_PHASE = "awaiting_security_code"
 SECURITY_SUBMITTING_PHASE = "submitting_security_code"
 LOGGER = logging.getLogger(__name__)
@@ -136,12 +144,12 @@ def load_drive_snapshot() -> tuple[DriveStorage | None, list[dict[str, str]], st
         # after seven days. Without naming that, the failure looks like an
         # unrelated Drive outage.
         if "invalid_grant" in detail or "token has been expired" in detail:
-            return None, [], (
-                "Googleの認証が失効しました。Google Cloudの「OAuth同意画面」を"
-                "本番公開にしたうえで、[google_oauth]のrefresh_tokenを"
-                "取り直してください。（テスト中のアプリは7日で失効します）"
-            )
+            return None, [], DRIVE_CREDENTIAL_EXPIRED
         return None, [], "Google Driveの領収書フォルダを確認できませんでした。"
+
+
+def _drive_credential_expired(drive_error: str) -> bool:
+    return str(drive_error or "") == DRIVE_CREDENTIAL_EXPIRED
 
 
 def receipts_for_month(files: list[dict[str, str]], target_month: str) -> dict[str, StoredReceipt | None]:
@@ -1254,6 +1262,10 @@ def render_monthly_view(
             detail=drive_error,
             code="DRIVE_CONNECTION_FAILED",
         )
+        # The credential can only be replaced by hand, but it must at least be
+        # replaceable from the phone rather than from a desktop script.
+        if _drive_credential_expired(drive_error):
+            render_google_reconnect(st, st.secrets)
         st.stop()
 
     receipts = receipts_for_month(drive_files, selected_month)
@@ -1607,6 +1619,10 @@ def render_archive_view(drive_files: list[dict[str, str]], drive_error: str) -> 
             detail=drive_error,
             code="DRIVE_CONNECTION_FAILED",
         )
+        # The credential can only be replaced by hand, but it must at least be
+        # replaceable from the phone rather than from a desktop script.
+        if _drive_credential_expired(drive_error):
+            render_google_reconnect(st, st.secrets)
         st.stop()
 
     archive: ReceiptArchive = build_receipt_archive(drive_files)
