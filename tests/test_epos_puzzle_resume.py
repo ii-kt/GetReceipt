@@ -27,23 +27,31 @@ class EposPuzzleResumeTest(unittest.TestCase):
         browser.evaluate.side_effect = evaluations
         return EposAutoFetcher(browser, credentials={}), browser
 
-    def test_an_unfinished_puzzle_is_reported_and_nothing_is_submitted(self) -> None:
-        fetcher, browser = self._fetcher([{"present": True, "answered": False}])
+    def test_an_untouched_puzzle_is_told_apart_by_its_fingerprint(self) -> None:
+        """The field arrives already holding the piece's starting position.
 
-        with self.assertRaises(AcquisitionError) as raised:
-            fetcher.resume_after_interactive_challenge("2026-07")
+        Treating a non-empty field as "solved" sent that starting value, Epos
+        answered that the puzzle was wrong, and the sign-in was spent.
+        """
 
-        self.assertEqual("INTERACTIVE_CHALLENGE_INCOMPLETE", raised.exception.code)
-        self.assertEqual("captcha", str(raised.exception.challenge_kind))
-        submitted = [
-            call for call in browser.evaluate.call_args_list
-            if "puzzleVerifyForm" in call.args[0] and "submit" in call.args[0]
-        ]
-        self.assertEqual([], submitted)
+        fetcher, _ = self._fetcher([{"present": True, "fingerprint": "a1b2c3"}])
+
+        state = fetcher.interactive_challenge_state()
+
+        self.assertEqual("a1b2c3", state["fingerprint"])
+        self.assertTrue(state["present"])
+
+    def test_the_fingerprint_is_a_digest_not_the_answer(self) -> None:
+        from src.automation.epos import build_epos_puzzle_state_expression
+
+        script = build_epos_puzzle_state_expression()
+
+        self.assertIn("digest(value)", script)
+        self.assertNotIn("answer: value", script)
 
     def test_the_answer_the_owner_produced_is_submitted_unchanged(self) -> None:
         fetcher, browser = self._fetcher(
-            [{"present": True, "answered": True}, "form.submit()"]
+            [{"present": True, "fingerprint": "moved"}, "form.submit()"]
         )
         with (
             patch.object(fetcher, "_wait_for_login_after_security_code"),
