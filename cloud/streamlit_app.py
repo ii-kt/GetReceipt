@@ -45,6 +45,7 @@ from src.ui.access_control import require_owner_access
 from src.ui.graph_link import graph_manager_from_secrets, render_graph_connection
 from src.ui import live_view
 from src.ui.manual_upload import render_manual_upload
+from src.ui.select_toggle import render_select_arrow_toggle
 from src.ui import styles as ui_styles
 from src.ui.module_contract import ensure_ui_module
 from src.workflows.auto_acquisition import NOT_ISSUED_CODES, run_auto_acquisition
@@ -1629,6 +1630,7 @@ def render_archive_view(drive_files: list[dict[str, str]], drive_error: str) -> 
 
 
 ui_styles.inject_design()
+render_select_arrow_toggle(st)
 require_owner_access(st, st.secrets)
 storage, drive_files, drive_error = load_drive_snapshot()
 handle_microsoft_oauth_callback(storage)
