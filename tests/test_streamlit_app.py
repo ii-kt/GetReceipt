@@ -15,6 +15,8 @@ CLOUD = ROOT / "cloud"
 if str(CLOUD) not in sys.path:
     sys.path.insert(0, str(CLOUD))
 
+from cryptography.fernet import Fernet
+
 from src.storage.drive_storage import DriveStorage
 from src.config import expected_transaction_month, service_by_id
 from src.ui import styles as ui_styles_module
@@ -562,6 +564,69 @@ class StreamlitAppTest(unittest.TestCase):
         self.assertIn("epos", attempted)
         self.assertGreater(len(attempted), 1)
         self.assertEqual([], list(app.exception))
+
+    def _drive_dead(self):
+        def refuse(*args, **kwargs):
+            raise RuntimeError("('invalid_grant: Token has been expired or revoked.')")
+
+        return refuse
+
+    def _app_with_encryption_key(self):
+        app = self.app()
+        app.secrets = dict(app.secrets) | {
+            "microsoft_graph": {"encryption_key": Fernet.generate_key().decode("ascii")},
+            "google_oauth": {
+                "client_id": "client.apps.googleusercontent.com",
+                "client_secret": "secret",
+                "refresh_token": "1//0e-the-stale-one-in-secrets",
+            },
+        }
+        return app
+
+    def test_a_stale_secret_is_recovered_from_the_stored_credential(self) -> None:
+        """Secrets can only be edited by hand, so a stale one must not stop the app.
+
+        The credential kept on the last reconnection is read back through the
+        service account key, which never expires.
+        """
+
+        files = [receipt_file("20260605", "株式会社エポスカード", 10001)]
+        app = self._app_with_encryption_key()
+        with (
+            patch.object(DriveStorage, "from_secrets", side_effect=self._drive_dead()),
+            patch.object(DriveStorage, "list_files", return_value=files),
+            patch("src.storage.drive_storage.build_drive_service", return_value=MagicMock()),
+            patch("src.storage.drive_storage.build_user_drive_service", return_value=MagicMock()),
+            patch(
+                "src.storage.google_credential_store.GoogleCredentialStore.load",
+                return_value="1//0e-recovered-refresh-token-value",
+            ),
+        ):
+            app.run(timeout=20)
+
+        self.assertEqual([], list(app.exception))
+        markdown = chr(10).join(item.value for item in app.markdown)
+        self.assertNotIn("DRIVE_CONNECTION_FAILED", markdown)
+        self.assertIn("株式会社エポスカード", markdown)
+
+    def test_without_a_stored_credential_the_reconnect_card_is_offered(self) -> None:
+        app = self._app_with_encryption_key()
+        with (
+            patch.object(DriveStorage, "from_secrets", side_effect=self._drive_dead()),
+            patch("src.storage.drive_storage.build_drive_service", return_value=MagicMock()),
+            patch(
+                "src.storage.google_credential_store.GoogleCredentialStore.load",
+                return_value="",
+            ),
+        ):
+            app.run(timeout=20)
+
+        self.assertEqual([], list(app.exception))
+        markdown = chr(10).join(item.value for item in app.markdown)
+        self.assertIn("DRIVE_CONNECTION_FAILED", markdown)
+        # The owner is offered the reconnection instead of being left stuck.
+        self.assertIn("Google Driveを接続し直す", markdown)
+        self.assertTrue(any("承認後のURL" in str(item.label) for item in app.text_input))
 
     def test_a_puzzle_holds_the_browser_open_instead_of_ending_the_job(self) -> None:
         """Epos guards its sign-in with a slide puzzle.

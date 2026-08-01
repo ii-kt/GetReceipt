@@ -25,6 +25,7 @@ from src.automation.mail_codes import (
 from src.automation.providers import build_receipt_fetcher
 from src.config import (
     DATA_DIR,
+    RECEIPT_DRIVE_FOLDER_ID,
     RECEIPT_DRIVE_FOLDER_URL,
     SERVICES,
     expected_transaction_month,
@@ -124,6 +125,83 @@ st.set_page_config(
 )
 
 
+def _credential_store() -> Any | None:
+    from src.storage.google_credential_store import GoogleCredentialStore
+
+    try:
+        encryption_key = str(st.secrets["microsoft_graph"]["encryption_key"] or "")
+    except Exception:
+        return None
+    if not encryption_key:
+        return None
+    try:
+        return GoogleCredentialStore(
+            folder_id=RECEIPT_DRIVE_FOLDER_ID, encryption_key=encryption_key
+        )
+    except Exception:
+        return None
+
+
+def recover_drive_from_store() -> DriveStorage | None:
+    """Reconnect Drive with the credential kept from the last reconnection.
+
+    The service account key in secrets never expires, and the stored file is
+    shared with it, so this works precisely when the owner's own secret has
+    stopped working.
+    """
+
+    from src.storage.drive_storage import (
+        build_drive_service,
+        build_user_drive_service,
+        load_service_account_info,
+        load_user_oauth_config,
+    )
+
+    store = _credential_store()
+    oauth_config = load_user_oauth_config(st.secrets)
+    if store is None or oauth_config is None:
+        return None
+    try:
+        reader = build_drive_service(load_service_account_info(st.secrets))
+        refresh_token = store.load(reader)
+    except Exception:
+        LOGGER.info("Stored Drive credential was unavailable")
+        return None
+    if not refresh_token or refresh_token == oauth_config.get("refresh_token"):
+        return None
+    try:
+        service = build_user_drive_service({**oauth_config, "refresh_token": refresh_token})
+        storage = DriveStorage(service, folder_id=RECEIPT_DRIVE_FOLDER_ID)
+        storage.list_files()
+    except Exception:
+        LOGGER.info("Stored Drive credential no longer works")
+        return None
+    LOGGER.info("Drive reconnected from the stored credential")
+    return storage
+
+
+def remember_drive_credential(refresh_token: str) -> bool:
+    """Keep a freshly issued credential so the next start needs no secrets edit."""
+
+    from src.storage.drive_storage import (
+        build_user_drive_service,
+        load_service_account_info,
+        load_user_oauth_config,
+    )
+
+    store = _credential_store()
+    oauth_config = load_user_oauth_config(st.secrets)
+    if store is None or oauth_config is None:
+        return False
+    try:
+        service = build_user_drive_service({**oauth_config, "refresh_token": refresh_token})
+        share_with = str(load_service_account_info(st.secrets).get("client_email") or "")
+        return store.save(service, refresh_token, share_with=share_with)
+    except Exception:
+        LOGGER.info("Freshly issued Drive credential was not stored")
+        return False
+
+
 def drive_secrets_configured() -> bool:
     try:
         return "google_service_account" in st.secrets
@@ -143,6 +221,13 @@ def load_drive_snapshot() -> tuple[DriveStorage | None, list[dict[str, str]], st
         return storage, storage.list_files(), ""
     except Exception as error:
         detail = f"{type(error).__name__}: {error}".lower()
+        if "invalid_grant" in detail or "token has been expired" in detail:
+            # Secrets can only be edited by hand. A credential stored on the
+            # last reconnection is read back here instead, so a stale secret
+            # never has to be touched again.
+            recovered = recover_drive_from_store()
+            if recovered is not None:
+                return recovered, recovered.list_files(), ""
         # A refresh token issued by an unpublished OAuth consent screen expires
         # after seven days. Without naming that, the failure looks like an
         # unrelated Drive outage.
@@ -1268,7 +1353,7 @@ def render_monthly_view(
         # The credential can only be replaced by hand, but it must at least be
         # replaceable from the phone rather than from a desktop script.
         if _drive_credential_expired(drive_error):
-            render_google_reconnect(st, st.secrets)
+            render_google_reconnect(st, st.secrets, remember=remember_drive_credential)
         st.stop()
 
     receipts = receipts_for_month(drive_files, selected_month)
@@ -1625,7 +1710,7 @@ def render_archive_view(drive_files: list[dict[str, str]], drive_error: str) -> 
         # The credential can only be replaced by hand, but it must at least be
         # replaceable from the phone rather than from a desktop script.
         if _drive_credential_expired(drive_error):
-            render_google_reconnect(st, st.secrets)
+            render_google_reconnect(st, st.secrets, remember=remember_drive_credential)
         st.stop()
 
     archive: ReceiptArchive = build_receipt_archive(drive_files)

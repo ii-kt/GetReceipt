@@ -104,7 +104,12 @@ def exchange_code(*, client_id: str, client_secret: str, code: str) -> str:
     return str(tokens.get("refresh_token") or "")
 
 
-def render_google_reconnect(st: Any, secrets: Any) -> None:
+def render_google_reconnect(
+    st: Any,
+    secrets: Any,
+    *,
+    remember: Any = None,
+) -> None:
     """Walk the owner through re-issuing the Drive credential on their phone."""
 
     section = _section(secrets, "google_oauth")
@@ -160,11 +165,29 @@ def render_google_reconnect(st: Any, secrets: Any) -> None:
             )
             return
 
-        st.success("発行できました。あとは下の内容をSecretsへ貼り替えるだけです。")
-        st.caption(
-            "Streamlit Cloud のアプリ設定 → Secrets を開き、[google_oauth] の "
-            "refresh_token をこの値に置き換えて保存してください。"
-            "この値は他人に見せないでください。"
+        stored = False
+        if callable(remember):
+            try:
+                stored = bool(remember(refresh_token))
+            except Exception:
+                stored = False
+        if stored:
+            st.success(
+                "接続し直しました。この接続情報はDriveに保存したので、"
+                "Secretsを書き換える必要はありません。",
+                icon=":material/check_circle:",
+            )
+            if st.button("アプリに戻る", type="primary", use_container_width=True):
+                st.rerun()
+            return
+
+        # Storing it needs a service account key in secrets; without one the
+        # value has to go back into secrets by hand.
+        st.warning(
+            "接続情報を保存できませんでした。下の値をSecretsへ貼り替えてください。"
+            "（[google_service_account] にサービスアカウントのJSONがあれば、"
+            "次回からこの手順は不要になります）",
+            icon=":material/warning:",
         )
         st.code(
             "[google_oauth]\n"
