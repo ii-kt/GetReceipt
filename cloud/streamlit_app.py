@@ -42,7 +42,9 @@ from src.jobs.client import (
 from src.storage.browser_profile_store import BrowserProfileStore
 from src.storage.drive_storage import DriveStorage
 from src.ui import remote_jobs
-from src.ui.access_control import require_owner_access
+# Kept importable, and covered by its tests, so the in-app gate can be put
+# back in one line if this app ever stops being privately shared.
+from src.ui.access_control import require_owner_access  # noqa: F401
 from src.ui import google_link
 from src.ui.graph_link import graph_manager_from_secrets, render_graph_connection
 from src.ui import live_view
@@ -1949,7 +1951,15 @@ def render_archive_view(drive_files: list[dict[str, str]], drive_error: str) -> 
 
 ui_styles.inject_design()
 render_select_arrow_toggle(st)
-require_owner_access(st, st.secrets)
+# Access is now gated by Streamlit Cloud itself: this app is shared with one
+# address and an anonymous visitor never reaches it, verified against the live
+# URL. The in-app sign-in on top of that only cost the owner a second login.
+#
+# That sharing setting is therefore the ONLY thing standing between the public
+# and the receipts, the stored provider credentials, and the buttons that sign
+# in to those providers. Setting the app back to public exposes all of it. To
+# put the second gate back, call require_owner_access(st, st.secrets) here -
+# the module and its tests are kept intact for exactly that.
 storage, drive_files, drive_error = load_drive_snapshot()
 # The month outcomes are read from and written to the same folder, so the
 # store needs whichever Drive connection actually worked this time.
