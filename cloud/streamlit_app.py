@@ -557,10 +557,12 @@ def complete_batch_service(batch: dict[str, Any], service_id: str) -> bool:
     if service_id not in completed:
         completed.append(service_id)
     batch["completed"] = completed
-    # The month is saved now, so any remembered reason is stale.
-    forget_month_outcome(
-        target_month=str(batch.get("target_month") or ""), service_id=service_id
-    )
+    target_month = str(batch.get("target_month") or "")
+    # The month is saved now, so any remembered reason is stale, and the
+    # sign-ins it took are spent - a later run must not inherit that count and
+    # refuse to start.
+    forget_month_outcome(target_month=target_month, service_id=service_id)
+    clear_signin_attempts(service_id, target_month)
     return _advance_batch(batch)
 
 
@@ -728,7 +730,12 @@ def file_billing_notice(
     try:
         manager = graph_manager
         if manager is None:
-            storage = DriveStorage.from_secrets(st.secrets)
+            # Reuse the connection that actually worked. Rebuilding it from
+            # secrets would fail whenever the stored credential is what is
+            # holding Drive up, and the notice would never be filed again.
+            storage = st.session_state.get(STATUS_STORAGE_KEY)
+            if storage is None:
+                return
             manager = graph_manager_from_secrets(st.secrets, storage)
         if manager is None or not bool(manager.status().get("connected")):
             return

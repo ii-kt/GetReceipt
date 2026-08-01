@@ -776,6 +776,45 @@ class StreamlitAppTest(unittest.TestCase):
         cleared = {call.kwargs["service_id"] for call in forget.call_args_list}
         self.assertIn("commufa", cleared)
 
+    def test_a_saved_month_does_not_inherit_its_sign_in_count(self) -> None:
+        """The cap protects against repeats, not against using the app.
+
+        Without clearing it, one session that took two sign-ins would refuse
+        to run that service again even after it had succeeded.
+        """
+
+        storage = FakeDriveStorage([])
+        attempts: list[str] = []
+
+        def acquire(**kwargs):
+            attempts.append(kwargs["service_id"])
+            transaction = expected_transaction_month(kwargs["service_id"], kwargs["target_month"])
+            file = receipt_file(
+                f"{transaction.replace('-', '')}01",
+                service_by_id(kwargs["service_id"]).default_partner,
+                1000,
+            )
+            storage.files.append(file)
+            return SimpleNamespace(
+                success=True, action_required=False, failure=None, file_name=file["name"]
+            )
+
+        app = self.app()
+        with (
+            patch.object(DriveStorage, "from_secrets", return_value=storage),
+            patch("src.automation.browser_session.ManagedBrowser"),
+            patch("src.automation.providers.build_receipt_fetcher", return_value=object()),
+            patch("src.workflows.auto_acquisition.run_auto_acquisition", side_effect=acquire),
+            patch("src.storage.status_store.ServiceStatusStore.load", return_value={}),
+            patch("src.storage.status_store.ServiceStatusStore.clear"),
+        ):
+            app.run(timeout=20)
+            next(b for b in app.button if "自動取得" in b.label).click().run(timeout=60)
+
+        self.assertEqual([], list(app.exception))
+        counts = app.session_state["getreceipt_signin_attempts"]
+        self.assertEqual({}, {k: v for k, v in counts.items() if v})
+
     def test_a_puzzle_holds_the_browser_open_instead_of_ending_the_job(self) -> None:
         """Epos guards its sign-in with a slide puzzle.
 
