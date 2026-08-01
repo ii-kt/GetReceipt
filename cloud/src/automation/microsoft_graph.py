@@ -34,6 +34,9 @@ class TokutenGraphFetcher:
     ) -> None:
         self.access_token_provider = access_token_provider
         self.session = session or requests.Session()
+        # The message the statement actually came from. Filing that exact one
+        # afterwards needs no month guessing at all.
+        self.source_message_id = ""
         self.service = service_by_id("tokuten")
         self.config = SERVICE_AUTOMATION_CONFIGS["tokuten"]
 
@@ -114,6 +117,7 @@ class TokutenGraphFetcher:
                         subject=str(message.get("subject") or ""),
                         file_name=file_name,
                     ):
+                        self.source_message_id = str(message_id)
                         return FetchedStatement(
                             content=content,
                             source_url="https://outlook.live.com/mail/0/",

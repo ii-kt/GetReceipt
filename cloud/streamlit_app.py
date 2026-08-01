@@ -576,6 +576,48 @@ def resume_with_mailed_code(
         code = ""
 
 
+def file_billing_notice(
+    service_id: str,
+    *,
+    target_month: str,
+    graph_manager: Any = None,
+    message_id: str = "",
+    status_box: Any = None,
+) -> None:
+    """Mark this month's "your bill is ready" mail read and archive it.
+
+    Only ever called once the month's PDF is confirmed in Drive, so the notice
+    has already done its job. Best effort throughout: a mailbox that cannot be
+    reached, or a notice that cannot be tied to this month, simply leaves the
+    inbox as it was.
+    """
+
+    from src.automation.billing_notices import BILLING_NOTICE_SOURCES, BillingNoticeFiler
+
+    if not message_id and service_id not in BILLING_NOTICE_SOURCES:
+        return
+    try:
+        manager = graph_manager
+        if manager is None:
+            storage = DriveStorage.from_secrets(st.secrets)
+            manager = graph_manager_from_secrets(st.secrets, storage)
+        if manager is None or not bool(manager.status().get("connected")):
+            return
+        result = BillingNoticeFiler(manager.access_token).file_for_month(
+            service_id,
+            transaction_month=expected_transaction_month(service_id, target_month),
+            message_id=message_id,
+        )
+    except Exception:
+        LOGGER.info("Billing notice filing skipped for %s", service_id)
+        return
+    if result.filed and status_box is not None:
+        try:
+            status_box.write("請求のお知らせメールを既読にしてアーカイブしました。")
+        except Exception:
+            pass
+
+
 def _run_tokuten_via_graph(
     *,
     storage: DriveStorage,
@@ -617,6 +659,15 @@ def _run_tokuten_via_graph(
         failure_code = ""
         failure_message = ""
         failure_detail = ""
+        # The statement is this mail's own attachment, so the exact message is
+        # already known and no month has to be guessed.
+        file_billing_notice(
+            "tokuten",
+            target_month=target_month,
+            graph_manager=graph_manager,
+            message_id=getattr(fetcher, "source_message_id", ""),
+            status_box=status_box,
+        )
 
     if failure_code:
         batch_complete = fail_batch_service(
@@ -833,6 +884,7 @@ def execute_next_service(storage: DriveStorage, batch: dict[str, Any]) -> None:
         )
         st.rerun()
 
+    file_billing_notice(service_id, target_month=target_month, status_box=status_box)
     batch_complete = complete_batch_service(batch, service_id)
     if not batch_complete:
         status_box.update(
@@ -997,6 +1049,7 @@ def resume_security_code(
         )
         st.rerun()
 
+    file_billing_notice(service_id, target_month=target_month, status_box=status_box)
     batch_complete = complete_batch_service(batch, service_id)
     status_box.update(
         label=(
