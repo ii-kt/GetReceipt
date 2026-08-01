@@ -25,6 +25,10 @@ from src.ui import styles as ui_styles_module
 class FakeDriveStorage:
     def __init__(self, files: list[dict[str, str]]):
         self.files = files
+        # The month-outcome record lives in the same folder and reaches Drive
+        # through this, so it has to exist for the app to keep any status.
+        self.service = MagicMock()
+        self.folder_id = "folder-1"
 
     def list_files(self) -> list[dict[str, str]]:
         return list(self.files)
@@ -704,6 +708,73 @@ class StreamlitAppTest(unittest.TestCase):
         markdown = chr(10).join(item.value for item in app.markdown)
         self.assertIn("中止しました", markdown)
         self.assertEqual([], list(app.exception))
+
+    def test_a_status_survives_reopening_the_app(self) -> None:
+        """Session state is gone on reload, so the reason has to outlive it.
+
+        Otherwise the screen forgets the run the owner just watched, and the
+        status can only ever describe the last few minutes.
+        """
+
+        storage = FakeDriveStorage([])
+        remembered = {
+            "2026-07": {
+                "commufa": {
+                    "code": "COMMUFA_MONTH_NOT_ISSUED",
+                    "message": "コミュファに2026年8月分の利用明細がまだ掲載されていません。",
+                    "detail": "掲載済みの最新は2026年7月分です。",
+                    "at": "2026-08-01T12:00:00+00:00",
+                }
+            }
+        }
+
+        # A brand-new session: nothing in session state, everything from Drive.
+        app = self.app()
+        with (
+            patch.object(DriveStorage, "from_secrets", return_value=storage),
+            patch(
+                "src.storage.status_store.ServiceStatusStore.load",
+                return_value=remembered,
+            ),
+        ):
+            app.run(timeout=20)
+
+        self.assertEqual([], list(app.exception))
+        cards = [str(item.value) for item in app.markdown if "gr-card" in str(item.value)]
+        commufa = next(c for c in cards if "中部テレコミュニケーション" in c)
+        self.assertIn("gr-card--not_issued", commufa)
+        self.assertIn("まだ掲載されていません", commufa)
+
+    def test_a_saved_month_forgets_its_remembered_reason(self) -> None:
+        storage = FakeDriveStorage([])
+
+        def acquire(**kwargs):
+            transaction = expected_transaction_month(kwargs["service_id"], kwargs["target_month"])
+            file = receipt_file(
+                f"{transaction.replace('-', '')}01",
+                service_by_id(kwargs["service_id"]).default_partner,
+                1000,
+            )
+            storage.files.append(file)
+            return SimpleNamespace(
+                success=True, action_required=False, failure=None, file_name=file["name"]
+            )
+
+        app = self.app()
+        with (
+            patch.object(DriveStorage, "from_secrets", return_value=storage),
+            patch("src.automation.browser_session.ManagedBrowser"),
+            patch("src.automation.providers.build_receipt_fetcher", return_value=object()),
+            patch("src.workflows.auto_acquisition.run_auto_acquisition", side_effect=acquire),
+            patch("src.storage.status_store.ServiceStatusStore.load", return_value={}),
+            patch("src.storage.status_store.ServiceStatusStore.clear") as forget,
+        ):
+            app.run(timeout=20)
+            next(b for b in app.button if "自動取得" in b.label).click().run(timeout=60)
+
+        self.assertEqual([], list(app.exception))
+        cleared = {call.kwargs["service_id"] for call in forget.call_args_list}
+        self.assertIn("commufa", cleared)
 
     def test_a_puzzle_holds_the_browser_open_instead_of_ending_the_job(self) -> None:
         """Epos guards its sign-in with a slide puzzle.

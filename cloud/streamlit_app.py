@@ -81,6 +81,8 @@ SECURITY_CHALLENGE_KEY = "getreceipt_security_challenge"
 INTERACTIVE_CHALLENGE_KINDS = frozenset({"captcha", "interactive"})
 PUZZLE_OPEN_KEY = "getreceipt_puzzle_open"
 SIGNIN_ATTEMPTS_KEY = "getreceipt_signin_attempts"
+STATUS_STORAGE_KEY = "getreceipt_status_storage"
+STORED_OUTCOMES_KEY = "getreceipt_stored_outcomes"
 # Every browser sign-in makes the provider mail or text a fresh verification
 # code. Two is enough to survive one bad attempt; beyond that the owner is
 # just being spammed, and repeated sign-ins are what risks an account lock.
@@ -313,11 +315,16 @@ def render_service_rows(
     challenge = security_challenge_for(target_month)
     challenge_service = str(challenge.get("service_id") or "") if challenge else ""
     persisted_failures = st.session_state.get(FAILURES_KEY, {})
-    month_failures = (
+    month_failures = dict(
         persisted_failures.get(target_month, {})
         if isinstance(persisted_failures, dict)
         else {}
     )
+    # Session state is gone the moment the page reloads, so a status the owner
+    # saw would be forgotten by the time they came back to look at it. The
+    # copy kept beside the receipts is what makes it outlive the visit.
+    for service_id, entry in stored_month_outcomes(target_month).items():
+        month_failures.setdefault(service_id, entry)
 
     for service in SERVICES:
         receipt = receipts[service.id]
@@ -533,6 +540,13 @@ def fail_batch_service(
     }
     persisted[target_month] = month_failures
     st.session_state[FAILURES_KEY] = persisted
+    remember_month_outcome(
+        target_month=target_month,
+        service_id=service_id,
+        code=code,
+        message=message,
+        detail=detail,
+    )
     return _advance_batch(batch)
 
 
@@ -541,6 +555,10 @@ def complete_batch_service(batch: dict[str, Any], service_id: str) -> bool:
     if service_id not in completed:
         completed.append(service_id)
     batch["completed"] = completed
+    # The month is saved now, so any remembered reason is stale.
+    forget_month_outcome(
+        target_month=str(batch.get("target_month") or ""), service_id=service_id
+    )
     return _advance_batch(batch)
 
 
@@ -1189,6 +1207,60 @@ def resume_security_code(
         state="complete",
     )
     st.rerun()
+
+
+def status_store() -> Any | None:
+    """The record of month outcomes kept beside the receipts in Drive."""
+
+    from src.storage.status_store import ServiceStatusStore
+
+    storage = st.session_state.get(STATUS_STORAGE_KEY)
+    if storage is None:
+        return None
+    try:
+        return ServiceStatusStore(storage.service, RECEIPT_DRIVE_FOLDER_ID)
+    except Exception:
+        return None
+
+
+def stored_month_outcomes(target_month: str) -> dict[str, dict[str, str]]:
+    cached = st.session_state.get(STORED_OUTCOMES_KEY)
+    if not isinstance(cached, dict):
+        store = status_store()
+        cached = store.load() if store is not None else {}
+        st.session_state[STORED_OUTCOMES_KEY] = cached
+    entries = cached.get(target_month)
+    return dict(entries) if isinstance(entries, dict) else {}
+
+
+def remember_month_outcome(
+    *, target_month: str, service_id: str, code: str, message: str, detail: str
+) -> None:
+    store = status_store()
+    if store is None:
+        return
+    try:
+        store.record(
+            target_month=target_month,
+            service_id=service_id,
+            code=code,
+            message=message,
+            detail=detail,
+        )
+    except Exception:
+        LOGGER.info("Month outcome was not stored for %s", service_id)
+    st.session_state.pop(STORED_OUTCOMES_KEY, None)
+
+
+def forget_month_outcome(*, target_month: str, service_id: str) -> None:
+    store = status_store()
+    if store is None:
+        return
+    try:
+        store.clear(target_month=target_month, service_id=service_id)
+    except Exception:
+        LOGGER.info("Month outcome was not cleared for %s", service_id)
+    st.session_state.pop(STORED_OUTCOMES_KEY, None)
 
 
 def signin_attempts(service_id: str, target_month: str) -> int:
@@ -1879,6 +1951,9 @@ ui_styles.inject_design()
 render_select_arrow_toggle(st)
 require_owner_access(st, st.secrets)
 storage, drive_files, drive_error = load_drive_snapshot()
+# The month outcomes are read from and written to the same folder, so the
+# store needs whichever Drive connection actually worked this time.
+st.session_state[STATUS_STORAGE_KEY] = storage
 handle_microsoft_oauth_callback(storage)
 ui_styles.render_compact_header(
     sync_label=current_sync_label() if not drive_error else "Drive未確認",
