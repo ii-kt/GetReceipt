@@ -178,6 +178,56 @@ class MailVerificationCodeReaderTest(unittest.TestCase):
 
         self.assertGreater(session.requests, 1)
 
+    def test_gives_up_quickly_when_the_provider_never_mails_this_mailbox(self) -> None:
+        """A code sent by SMS must not stall the acquisition for 90 seconds."""
+
+        sleeps: list[float] = []
+        reader, session = _reader([], sleep_calls=sleeps)
+        clock = [NOW]
+        reader._now = lambda: clock[0]
+
+        def sleep(seconds: float) -> None:
+            sleeps.append(seconds)
+            clock[0] = clock[0] + timedelta(seconds=seconds)
+
+        reader._sleep = sleep
+
+        with self.assertRaises(MailCodeUnavailableError):
+            reader.wait_for_code(
+                SOURCE,
+                requested_after=NOW,
+                timeout_seconds=90,
+                poll_seconds=5,
+            )
+
+        self.assertLessEqual(sum(sleeps), 25)
+
+    def test_keeps_waiting_when_this_provider_does_mail_the_code(self) -> None:
+        """An old message proves the route works, so a new one is worth waiting for."""
+
+        sleeps: list[float] = []
+        reader, _ = _reader(
+            [_message(code="155493", minutes_ago=600)], sleep_calls=sleeps
+        )
+        clock = [NOW]
+        reader._now = lambda: clock[0]
+
+        def sleep(seconds: float) -> None:
+            sleeps.append(seconds)
+            clock[0] = clock[0] + timedelta(seconds=seconds)
+
+        reader._sleep = sleep
+
+        with self.assertRaises(MailCodeUnavailableError):
+            reader.wait_for_code(
+                SOURCE,
+                requested_after=NOW,
+                timeout_seconds=90,
+                poll_seconds=5,
+            )
+
+        self.assertGreaterEqual(sum(sleeps), 85)
+
 
 
 class UsedCodeMailIsFiledTest(unittest.TestCase):

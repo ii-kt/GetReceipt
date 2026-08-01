@@ -21,6 +21,10 @@ AccessTokenProvider = Callable[[], str]
 # predates this attempt is still usable. Bound how far back that may reach.
 _FALLBACK_MAX_AGE = timedelta(minutes=30)
 _CLOCK_SKEW = timedelta(minutes=2)
+# How long to keep looking when the provider has never mailed this mailbox at
+# all: long enough for a first message still in flight, short enough that a
+# code sent by SMS instead does not stall the acquisition.
+_NO_SENDER_GRACE_SECONDS = 20
 
 
 @dataclass(frozen=True)
@@ -119,10 +123,17 @@ class MailVerificationCodeReader:
         deadline = self._now() + timedelta(seconds=timeout_seconds)
         fallback = ""
         while True:
-            fresh, recent = self._read_codes(source, threshold=threshold)
+            fresh, recent, seen_sender = self._read_codes(source, threshold=threshold)
             if fresh:
                 return fresh
             fallback = fallback or recent
+            if not seen_sender:
+                # This provider has never mailed this mailbox, so it is sending
+                # the code somewhere else - by SMS, typically. Waiting out the
+                # full timeout only delays asking the owner for it.
+                deadline = min(
+                    deadline, self._now() + timedelta(seconds=_NO_SENDER_GRACE_SECONDS)
+                )
             if self._now() >= deadline:
                 break
             self._sleep(poll_seconds)
@@ -143,15 +154,17 @@ class MailVerificationCodeReader:
         source: MailCodeSource,
         *,
         threshold: datetime,
-    ) -> tuple[str, str]:
-        """Return (code newer than threshold, newest recent code)."""
+    ) -> tuple[str, str, bool]:
+        """Return (fresh code, newest recent code, provider mails here at all)."""
 
         messages = self._search(source)
         newest_recent = ""
+        seen_sender = False
         cutoff = self._now() - _FALLBACK_MAX_AGE
         for message in messages:
             if not self._sender_matches(message, source):
                 continue
+            seen_sender = True
             received = _parse_timestamp(message.get("receivedDateTime"))
             if received is None:
                 continue
@@ -160,11 +173,11 @@ class MailVerificationCodeReader:
                 continue
             if received >= threshold:
                 self._retire_message(message)
-                return code, newest_recent
+                return code, newest_recent, True
             if not newest_recent and received >= cutoff:
                 newest_recent = code
                 self._pending_fallback_id = str(message.get("id") or "")
-        return "", newest_recent
+        return "", newest_recent, seen_sender
 
     def _retire_message(self, message: dict[str, Any]) -> None:
         """Mark a consumed code mail as read and move it out of the inbox.

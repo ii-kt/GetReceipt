@@ -623,6 +623,13 @@ return {
             result = self.browser.evaluate(build_epos_auto_login_expression(self.credentials), timeout=10) or {}
             return self._apply_login_result(result)
 
+        if self._credential_submission_attempted:
+            # The password has already gone. Re-typing it into the page cannot
+            # send it again - the guard below forbids that - so the whole fill
+            # routine is pure delay while the provider answers, and it would
+            # put the password back on the page on every single poll.
+            return False
+
         if not self._set_epos_login_fields(payload):
             raise AcquisitionError(
                 "エポスカードのログイン入力欄に認証情報を自動入力できませんでした。",

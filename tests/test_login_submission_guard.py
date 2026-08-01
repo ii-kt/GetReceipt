@@ -22,6 +22,7 @@ class _Browser:
     def __init__(self, evaluations: list | None = None) -> None:
         self.clicks: list[tuple[int, int]] = []
         self.keys: list[str] = []
+        self.typed: list[str] = []
         self.evaluated: list[str] = []
         self._evaluations = list(evaluations or [])
 
@@ -30,6 +31,12 @@ class _Browser:
 
     def press_key(self, key: str) -> None:
         self.keys.append(key)
+
+    def clear_focused_text(self) -> None:
+        pass
+
+    def type_text(self, text: str, delay_seconds: float = 0.0) -> None:
+        self.typed.append(text)
 
     def evaluate(self, expression: str, **_kwargs):
         self.evaluated.append(expression)
@@ -90,6 +97,46 @@ class LoginSubmissionGuardTest(unittest.TestCase):
 
         submits = [e for e in browser.evaluated if "noCardUseDetailLoginForm" in e]
         self.assertEqual(1, len(submits))
+
+    def test_epos_stops_retyping_the_password_while_it_waits(self) -> None:
+        """Waiting must not mean refilling the form on every poll.
+
+        The password can only be sent once per attempt, so re-typing it just
+        delays noticing that the sign-in already worked, and puts the password
+        back on the page again and again.
+        """
+
+        browser = _Browser([{"ok": True, "hit": True, "point": {"x": 1, "y": 2}}])
+        browser.evaluate = lambda expression, **kwargs: (  # type: ignore[assignment]
+            True
+            if "activeElement" in expression
+            else {"ok": True, "hit": True, "point": {"x": 1, "y": 2}}
+            if "elementFromPoint" in expression
+            else {"readyState": "complete", "hasLoginId": True, "hasPassword": True,
+                  "hasAbckCookie": True, "hasBmCookie": True}
+            if "readyState" in expression
+            else {"ok": True, "buttonPoint": {"x": 1, "y": 2}}
+            if "buttonPoint" in expression
+            else {"loginIdMatches": True, "passwordMatches": True}
+        )
+        fetcher = EposAutoFetcher(
+            browser,  # type: ignore[arg-type]
+            credentials={"login_id": "kt0000000", "password": "0000000kt"},
+        )
+
+        with patch("src.automation.epos.time.sleep"):
+            first = fetcher._perform_human_login_attempt()
+            calls_after_first = len(browser.evaluated)
+            second = fetcher._perform_human_login_attempt()
+            third = fetcher._perform_human_login_attempt()
+
+        self.assertTrue(first)
+        self.assertFalse(second)
+        self.assertFalse(third)
+        # Waiting costs nothing: no page work and no retyping after the submit.
+        self.assertEqual(calls_after_first, len(browser.evaluated))
+        self.assertEqual(["kt0000000", "0000000kt"], browser.typed)
+        self.assertEqual(1, len(browser.clicks))
 
     def test_commufa_submits_credentials_only_once(self) -> None:
         browser = _Browser()

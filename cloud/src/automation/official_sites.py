@@ -764,6 +764,23 @@ class WebBillingAutoFetcher:
         self.config = SERVICE_AUTOMATION_CONFIGS["mobile"]
         self._credential_submission_attempted = False
 
+    def _navigation_credentials(self) -> dict[str, str]:
+        """Credentials for the login script, minus what it no longer needs.
+
+        The script keeps running after the password has gone, because it is
+        what walks the portal on to the d-account page. It cannot send the
+        password a second time, so carrying it into the page on every poll -
+        a hundred times over a two minute wait - achieves nothing.
+        """
+
+        if not self._credential_submission_attempted:
+            return self.credentials
+        return {
+            key: value
+            for key, value in self.credentials.items()
+            if key != "password"
+        }
+
     def open_portal(self) -> dict[str, Any]:
         self.browser.navigate(self.config.target_url, wait_seconds=1.5)
         self._advance_login(max_steps=4)
@@ -886,7 +903,10 @@ class WebBillingAutoFetcher:
             last_state = state
             if state == "logged-in":
                 return
-            auto_login = self.browser.evaluate(build_webbilling_auto_login_expression(self.credentials), timeout=15) or {}
+            auto_login = self.browser.evaluate(
+                build_webbilling_auto_login_expression(self._navigation_credentials()),
+                timeout=15,
+            ) or {}
             last_reason = str(
                 auto_login.get("reason") or auto_login.get("code") or ""
             )
@@ -952,7 +972,10 @@ class WebBillingAutoFetcher:
             summary = self.browser.page_summary()
             if classify_configured_login_state(summary, self.config) == "logged-in":
                 return
-            auto_login = self.browser.evaluate(build_webbilling_auto_login_expression(self.credentials), timeout=8) or {}
+            auto_login = self.browser.evaluate(
+                build_webbilling_auto_login_expression(self._navigation_credentials()),
+                timeout=8,
+            ) or {}
             if self._apply_login_result(auto_login):
                 continue
             return
