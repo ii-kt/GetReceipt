@@ -1425,6 +1425,30 @@ def render_security_code_form(
         restart_security_challenge(batch, challenge)
 
 
+def interactive_challenge_fingerprint(challenge: dict[str, Any]) -> str:
+    """Digest of the puzzle's answer field, for telling moved from untouched."""
+
+    token = str(challenge.get("token") or "")
+    service_id = str(challenge.get("service_id") or "")
+    if not token or not service_id:
+        return ""
+    try:
+        with challenge_runtime.browser_lease_registry.checkout(
+            token,
+            expected_service_id=service_id,
+            expected_target_month=str(challenge.get("target_month") or ""),
+        ) as lease:
+            fetcher = build_receipt_fetcher(
+                service_id, lease.browser, service_credentials(st.secrets, service_id)
+            )
+            reader = getattr(fetcher, "interactive_challenge_state", None)
+            if not callable(reader):
+                return ""
+            return str((reader() or {}).get("fingerprint") or "")
+    except Exception:
+        return ""
+
+
 def render_interactive_challenge(
     storage: DriveStorage,
     batch: dict[str, Any],
@@ -1451,6 +1475,12 @@ def render_interactive_challenge(
             use_container_width=True,
         ):
             st.session_state[opened_key] = True
+            # Remember the answer as it arrives. The page ships that field
+            # already holding the piece's starting position, so only a change
+            # in it shows the owner has actually moved anything.
+            st.session_state[f"{opened_key}__before"] = interactive_challenge_fingerprint(
+                challenge
+            )
             st.rerun()
         return
 
@@ -1475,7 +1505,20 @@ def render_interactive_challenge(
         type="primary",
         use_container_width=True,
     ):
+        before = str(st.session_state.get(f"{opened_key}__before") or "")
+        now = interactive_challenge_fingerprint(challenge)
+        if before and now and before == now:
+            # Sending an untouched puzzle only earns the provider's "wrong
+            # puzzle" page, and that costs the whole sign-in.
+            st.error(
+                "ピースがまだ動いていません。画面でピースを枠に合わせてから、"
+                "もう一度押してください。",
+                icon=":material/drag_pan:",
+            )
+            st.session_state[opened_key] = True
+            return
         st.session_state.pop(opened_key, None)
+        st.session_state.pop(f"{opened_key}__before", None)
         resume_security_code(storage, batch, challenge, "")
 
     if st.button(

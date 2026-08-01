@@ -299,10 +299,14 @@ return "form.submit()";
 
 
 def build_epos_puzzle_state_expression() -> str:
-    """Report whether the image check is still on screen and whether it is answered.
+    """Report whether the image check is on screen, and fingerprint its answer.
 
-    ``answered`` only reflects what the owner's own dragging has already put
-    into the page's hidden field. Nothing here computes or alters it.
+    The answer field is not empty on arrival - the page ships it holding the
+    piece's starting position - so its mere presence says nothing about
+    whether the owner has moved anything. Only a change in it does, which is
+    why this returns a fingerprint to compare rather than a yes or no.
+
+    The fingerprint is a digest, never the value itself.
     """
 
     return r"""(() => {
@@ -311,9 +315,18 @@ const form = document.forms["puzzleVerifyForm"]
 if (!form) return { present: false };
 const answer = form.querySelector("input[name='capy_answer']");
 const challenge = form.querySelector("input[name='capy_challengekey']");
+const digest = (text) => {
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
+};
+const value = answer ? String(answer.value || "") : "";
 return {
   present: true,
-  answered: !!answer && String(answer.value || "").trim().length > 0,
+  fingerprint: value ? digest(value) : "",
   hasChallenge: !!challenge && String(challenge.value || "").trim().length > 0,
 };
 })()"""
@@ -401,6 +414,21 @@ class EposAutoFetcher:
             logs=tuple(form.get("logs") or ()),
         )
 
+    def interactive_challenge_state(self) -> dict[str, Any]:
+        """Describe the image check without touching it.
+
+        The caller compares the fingerprint across time: unchanged means the
+        piece has not moved, and submitting then only produces the provider's
+        "puzzle was wrong" page and costs a whole sign-in.
+        """
+
+        try:
+            return self.browser.evaluate(
+                build_epos_puzzle_state_expression(), timeout=10
+            ) or {}
+        except Exception:
+            return {}
+
     def resume_after_interactive_challenge(self, target_month: str) -> FetchedStatement:
         """Continue on the same live page once the owner has cleared a gate.
 
@@ -409,15 +437,8 @@ class EposAutoFetcher:
         answer their own dragging left in the page and carries on.
         """
 
-        state = self.browser.evaluate(build_epos_puzzle_state_expression(), timeout=10) or {}
+        state = self.interactive_challenge_state()
         if state.get("present"):
-            if not state.get("answered"):
-                raise AcquisitionError(
-                    "パズルがまだ完成していません。",
-                    code="INTERACTIVE_CHALLENGE_INCOMPLETE",
-                    advice="ピースを枠に合わせてから、もう一度「解除」を押してください。",
-                    challenge_kind=ChallengeKind.CAPTCHA,
-                )
             self.browser.evaluate(build_epos_puzzle_submit_expression(), timeout=10)
             time.sleep(3.0)
         self._wait_for_login_after_security_code()
