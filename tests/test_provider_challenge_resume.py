@@ -279,3 +279,40 @@ class UnissuedMonthIsNotAFaultTest(unittest.TestCase):
         # The list header prints "照会日時：2026年07月29日", which must not be
         # collected as an available month.
         self.assertIn(r"月(?!\s*\d{1,2}\s*日)", script)
+
+
+class WebBillingSplitCodePageTest(unittest.TestCase):
+    """d-account asks for its code in six one-character boxes.
+
+    Verified in a real browser against that layout: the single-field test sees
+    zero code inputs there, so without the split-box branch the page was
+    reported as some other kind of check and the owner was never offered the
+    box to type the code they had just been sent.
+    """
+
+    def setUp(self) -> None:
+        from src.automation.official_sites import build_webbilling_auto_login_expression
+
+        self.script = build_webbilling_auto_login_expression(
+            {"d_account_id": "owner@example.test", "password": "secret"}
+        )
+
+    def test_a_run_of_one_character_boxes_counts_as_a_code_field(self) -> None:
+        self.assertIn('Number(input.getAttribute("maxlength") || 0) === 1', self.script)
+        self.assertIn("splitCodeBoxes.length >= 4 && splitCodeBoxes.length <= 8", self.script)
+
+    def test_the_code_page_asks_for_a_code_rather_than_hand_operation(self) -> None:
+        """"interactive" routes to a screen this provider cannot resume from."""
+
+        self.assertIn('codeFieldPresent && exactSecurityOrigin', self.script)
+        self.assertIn('exactSecurityOrigin ? "verification_code" : "interactive"', self.script)
+
+    def test_the_d_account_code_host_is_treated_as_the_providers_own(self) -> None:
+        self.assertIn("cfg.smt.docomo.ne.jp", self.script)
+
+    def test_this_provider_can_resume_from_a_typed_code(self) -> None:
+        from src.automation.official_sites import WebBillingAutoFetcher
+
+        self.assertTrue(
+            callable(getattr(WebBillingAutoFetcher, "resume_after_security_code", None))
+        )

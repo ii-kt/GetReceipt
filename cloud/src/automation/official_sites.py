@@ -1628,8 +1628,23 @@ const codeInputs = [...document.querySelectorAll("input")]
   .filter((input) => ["text", "tel", "number", "password"].includes(String(input.type || "text").toLowerCase()))
   .filter((input) => codeHints.some((word) => normalize(labelOf(input) + " " + contextOf(input, 4)).includes(normalize(word))));
 const exactSecurityOrigin = location.protocol === "https:" && ["webbilling.ntt-finance.co.jp", "id.smt.docomo.ne.jp", "cfg.smt.docomo.ne.jp"].includes(location.hostname);
-if (codeInputs.length === 1 && exactSecurityOrigin) return { attempted: false, waitingForSecurityCode: true, code: "WAIT_SECURITY_CODE", challengeKind: "verification_code", reason: "セキュリティコード入力待ちです。" };
-if (securityWords.some((word) => pageText.includes(normalize(word)))) return { attempted: false, code: "SECURITY_CHALLENGE", challengeKind: "interactive", reason: "コード入力以外の追加認証が表示されています。" };
+// The d-account code page is six one-character boxes with no labels, so it
+// matches neither the single-field test above nor any code wording. Left
+// unrecognised it was reported as some other kind of check, and the owner was
+// never offered the box to type the code they had just been sent.
+const splitCodeBoxes = [...document.querySelectorAll("input")]
+  .filter(visible)
+  .filter((input) => ["text", "tel", "number", "password"].includes(String(input.type || "text").toLowerCase()))
+  .filter((input) => Number(input.getAttribute("maxlength") || 0) === 1);
+const codeFieldPresent = codeInputs.length === 1 || (splitCodeBoxes.length >= 4 && splitCodeBoxes.length <= 8);
+if (codeFieldPresent && exactSecurityOrigin) return { attempted: false, waitingForSecurityCode: true, code: "WAIT_SECURITY_CODE", challengeKind: "verification_code", splitCount: splitCodeBoxes.length, reason: "セキュリティコード入力待ちです。" };
+if (securityWords.some((word) => pageText.includes(normalize(word)))) {
+  // On the provider's own security page this wording means a code is being
+  // asked for, even when the field has not rendered yet. Anywhere else it is
+  // something the owner has to deal with by hand.
+  const kind = exactSecurityOrigin ? "verification_code" : "interactive";
+  return { attempted: false, waitingForSecurityCode: exactSecurityOrigin, code: exactSecurityOrigin ? "WAIT_SECURITY_CODE" : "SECURITY_CHALLENGE", challengeKind: kind, reason: "追加認証が表示されています。" };
+}
 const passwordInput = [...document.querySelectorAll("input[type='password']")].find(visible);
 // The portal shows its own ID/password form and a d-account entry on the
 // same page, and that entry is a zero-sized link inside a collapsed block,
