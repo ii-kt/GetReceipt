@@ -1760,7 +1760,10 @@ const bestControl = (keywords, excludes = []) => controls()
     }
     for (const word of excludes) {
       const key = normalize(word);
-      if (text.includes(key) || context.includes(key)) score -= 220;
+      // Only the control's own label rules it out. Judging by the text around
+      // it meant a 戻る sitting in the same dialog cancelled out the button
+      // being looked for, and the step pressed the wrong control forever.
+      if (text.includes(key)) score -= 220;
     }
     if (disabledLike(el)) score -= 500;
     return { el, label, score };
@@ -1886,9 +1889,18 @@ const certificateMenu = controls()
   })
   .filter(Boolean)
   .sort((a, b) => b.score - a.score || a.label.length - b.label.length)[0];
-if (certificateMenu) return { ok: false, code: "CLICK_CERTIFICATE_MENU", click: pointOf(certificateMenu.el), waitMs: 1600, logs: ["料金支払証明書・ご利用料金証明書を開きます: " + certificateMenu.label.trim().slice(0, 120)] };
-const search = bestControl(["検索"], ["ログアウト"]);
-if (String(location.href).includes("/mem/c0301/") && search) return { ok: false, code: "CLICK_SEARCH", click: pointOf(search.el), waitMs: 1000, logs: ["Webビリングの証明書検索を押します。"] };
+// The menu stays on screen after it has been opened, so pressing it again
+// whenever it is visible would loop forever on the page it just reached. The
+// page itself says which one it is; its address is not relied on, because the
+// certificate path is not something this can know.
+// The menu entry itself is named after the page, so its wording cannot tell
+// the two apart. The step indicator only exists once the page is open.
+const onCertificatePage = normalizedPageText.includes(normalize("対象選択"))
+  || normalizedPageText.includes(normalize("証明書のダウンロード"));
+const search = bestControl(["検索"], ["ログアウト", "戻る"]);
+if (onCertificatePage && search) return { ok: false, code: "CLICK_SEARCH", click: pointOf(search.el), waitMs: 1200, logs: ["Webビリングの証明書検索を押します。"] };
+if (!onCertificatePage && certificateMenu) return { ok: false, code: "CLICK_CERTIFICATE_MENU", click: pointOf(certificateMenu.el), waitMs: 1600, logs: ["料金支払証明書・ご利用料金証明書を開きます: " + certificateMenu.label.trim().slice(0, 120)] };
+if (search) return { ok: false, code: "CLICK_SEARCH", click: pointOf(search.el), waitMs: 1200, logs: ["Webビリングの証明書検索を押します。"] };
 return { ok: false, code: "CERTIFICATE_MENU_NOT_FOUND", message: "Webビリングで料金支払証明書・ご利用料金証明書を見つけられませんでした。", advice: "Webビリングにログイン後、左メニューに証明書メニューが表示されているか確認してください。", visibleControls: controls().slice(0, 50).map((el) => labelOf(el).trim().slice(0, 120)).filter(Boolean), logs };
 """,
     )

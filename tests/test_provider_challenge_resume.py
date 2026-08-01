@@ -346,3 +346,43 @@ class WebBillingCertificateMenuTest(unittest.TestCase):
 
     def test_both_certificate_wordings_are_accepted(self) -> None:
         self.assertIn('["料金支払証明書", "ご利用料金証明書"]', self.script)
+
+
+class WebBillingCertificateStepsTest(unittest.TestCase):
+    """The certificate flow, checked against copies of the real screens.
+
+    Screens: menu -> 対象選択 list -> 注意事項 -> confirmation dialog.
+    """
+
+    def setUp(self) -> None:
+        from src.automation.official_sites import build_webbilling_step_expression
+
+        self.script = build_webbilling_step_expression(2026, 7)
+
+    def test_a_control_is_ruled_out_by_its_own_label_only(self) -> None:
+        """A 戻る in the same dialog used to cancel out the download button."""
+
+        self.assertIn("if (text.includes(key)) score -= 220;", self.script)
+        self.assertNotIn("if (text.includes(key) || context.includes(key))", self.script)
+
+    def test_the_open_page_is_told_apart_from_the_menu_naming_it(self) -> None:
+        """Both carry the same words; only the open page has the step indicator."""
+
+        self.assertIn('normalize("対象選択")', self.script)
+        self.assertIn("!onCertificatePage && certificateMenu", self.script)
+
+    def test_the_certificate_path_is_not_assumed(self) -> None:
+        self.assertNotIn("/mem/c0301/", self.script)
+
+    def test_every_step_of_the_download_is_covered(self) -> None:
+        for code in (
+            "CLICK_CERTIFICATE_MENU",
+            "CLICK_SEARCH",
+            "CLICK_TARGET_CHECKBOX",
+            "CLICK_NEXT",
+            "CLICK_CONSENT",
+            "CLICK_DOWNLOAD",
+            "CLICK_FINAL_DOWNLOAD",
+        ):
+            with self.subTest(code=code):
+                self.assertIn(code, self.script)
