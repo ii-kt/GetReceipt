@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import shutil
+import time
 import unicodedata
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -46,7 +47,10 @@ from src.ui import remote_jobs
 # back in one line if this app ever stops being privately shared.
 from src.ui.access_control import require_owner_access  # noqa: F401
 from src.ui import google_link
-from src.ui.graph_link import graph_manager_from_secrets, render_graph_connection
+from src.ui.graph_link import (
+    graph_manager_from_secrets as _build_graph_manager,
+    render_graph_connection,
+)
 from src.ui import live_view
 from src.ui.manual_upload import render_manual_upload
 from src.ui.select_toggle import render_select_arrow_toggle
@@ -85,6 +89,23 @@ PUZZLE_OPEN_KEY = "getreceipt_puzzle_open"
 SIGNIN_ATTEMPTS_KEY = "getreceipt_signin_attempts"
 STATUS_STORAGE_KEY = "getreceipt_status_storage"
 STORED_OUTCOMES_KEY = "getreceipt_stored_outcomes"
+GRAPH_MANAGER_KEY = "getreceipt_graph_manager"
+# One attempt at one service gets this long, end to end. Every wait inside is
+# bounded on its own, but they add up: sign-in, then a step loop, then a
+# download, then all of it again after a verification code - tens of minutes
+# in the worst case, which on a phone is an acquisition that never ends. The
+# budget is what makes that impossible rather than unlikely.
+SERVICE_ATTEMPT_BUDGET_SECONDS = 150
+# Continuing after the owner has supplied a code does the whole statement
+# fetch, so it gets its own budget rather than the remains of the first.
+SECURITY_RESUME_BUDGET_SECONDS = 210
+# How long to look for a code in the mailbox before asking the owner instead.
+# A provider that mails codes here has already answered within one poll; the
+# rest is for one still in flight.
+MAIL_CODE_WAIT_SECONDS = 45
+# Keep this much of the attempt back for the sign-in that the code unlocks.
+# Spending the whole budget waiting for the code leaves nothing to use it with.
+MAIL_CODE_RESERVE_SECONDS = 60
 # Every browser sign-in makes the provider mail or text a fresh verification
 # code. Two is enough to survive one bad attempt; beyond that the owner is
 # just being spammed, and repeated sign-ins are what risks an account lock.
@@ -255,6 +276,29 @@ def load_drive_snapshot() -> tuple[DriveStorage | None, list[dict[str, str]], st
 
 def _drive_credential_expired(drive_error: str) -> bool:
     return str(drive_error or "") == DRIVE_CREDENTIAL_EXPIRED
+
+
+def graph_manager_from_secrets(secrets: Any, storage: Any) -> Any | None:
+    """One Microsoft manager per visit, so one access token serves them all.
+
+    Each manager mints its own token, and minting one costs a Drive read, a
+    decryption and a round trip to Microsoft. Building a fresh manager for the
+    mail-code reader, then the invoice reader, then the notice filer made a
+    single acquisition pay that several times over while the owner watched.
+    """
+
+    cached = st.session_state.get(GRAPH_MANAGER_KEY)
+    if isinstance(cached, tuple) and len(cached) == 2:
+        cached_storage, manager = cached
+        # A reconnected Drive is a different service object, and the manager
+        # reads its token through that service. Only reuse one built on the
+        # storage still in use.
+        if cached_storage is storage and manager is not None:
+            return manager
+    manager = _build_graph_manager(secrets, storage)
+    if manager is not None:
+        st.session_state[GRAPH_MANAGER_KEY] = (storage, manager)
+    return manager
 
 
 def receipts_for_month(files: list[dict[str, str]], target_month: str) -> dict[str, StoredReceipt | None]:
@@ -663,6 +707,7 @@ def resume_with_mailed_code(
     storage_secrets: Any,
     requested_after: datetime,
     status_box: Any,
+    seconds_left: float | None = None,
 ) -> Any | None:
     """Finish a verification-code challenge using the owner's own mailbox.
 
@@ -686,11 +731,24 @@ def resume_with_mailed_code(
     except Exception:
         return None
 
+    # Reading the mail is worth doing only if what it buys - the rest of the
+    # acquisition - still fits in the attempt. Otherwise it is a wait that
+    # ends in asking the owner for the code anyway, just later.
+    mail_budget = MAIL_CODE_WAIT_SECONDS
+    if seconds_left is not None:
+        mail_budget = min(mail_budget, max(0.0, float(seconds_left) - MAIL_CODE_RESERVE_SECONDS))
+        if mail_budget <= 0:
+            return None
+
     status_box.write("メールに届いた確認コードを自動で読み取っています。")
     code = ""
     try:
         reader = MailVerificationCodeReader(graph_manager.access_token)
-        code = reader.wait_for_code(source, requested_after=requested_after)
+        code = reader.wait_for_code(
+            source,
+            requested_after=requested_after,
+            timeout_seconds=mail_budget,
+        )
         return run_auto_acquisition(
             service_id=service_id,
             target_month=target_month,
@@ -860,8 +918,11 @@ def execute_next_service(storage: DriveStorage, batch: dict[str, Any]) -> None:
     batch["current_service"] = service_id
     batch["phase"] = "running"
     st.session_state[BATCH_KEY] = batch
+    # The limit is named up front so a slow provider reads as a run with an
+    # end, not as a screen that has stopped responding.
     status_box = st.status(
-        f"{position}/{len(service_ids)}  {service.label}を自動取得しています。",
+        f"{position}/{len(service_ids)}  {service.label}を自動取得しています。"
+        f"（最長{SERVICE_ATTEMPT_BUDGET_SECONDS // 60}分）",
         expanded=True,
     )
 
@@ -925,8 +986,16 @@ def execute_next_service(storage: DriveStorage, batch: dict[str, Any]) -> None:
             profile_dir=run_dir / "profile",
             download_dir=run_dir / "downloads",
         )
+        # Everything this attempt does has to go through the browser, so the
+        # budget lives there: no wait loop, here or in any fetcher, can outlive
+        # it, and none of them has to remember to check.
+        browser.set_deadline(SERVICE_ATTEMPT_BUDGET_SECONDS)
+        attempt_deadline = time.monotonic() + SERVICE_ATTEMPT_BUDGET_SECONDS
         fetcher = build_receipt_fetcher(service_id, browser, credentials)
         attempt_started_at = datetime.now(timezone.utc)
+        # The workflow is deliberately not given a cancellation check: once the
+        # statement is in hand, a spent budget must not be the reason it is
+        # thrown away instead of saved. Saving to Drive is bounded on its own.
         result = run_auto_acquisition(
             service_id=service_id,
             target_month=target_month,
@@ -946,6 +1015,7 @@ def execute_next_service(storage: DriveStorage, batch: dict[str, Any]) -> None:
                 storage_secrets=st.secrets,
                 requested_after=attempt_started_at,
                 status_box=status_box,
+                seconds_left=attempt_deadline - time.monotonic(),
             )
             if resumed is not None:
                 result = resumed
@@ -959,6 +1029,11 @@ def execute_next_service(storage: DriveStorage, batch: dict[str, Any]) -> None:
             )
             if not callable(getattr(fetcher, resume_attribute, None)):
                 raise RuntimeError("この請求元は安全な再開に対応していません。")
+            # From here the owner is the one taking the time - reading a code
+            # off their phone, or moving a puzzle piece. The attempt budget is
+            # about the app spinning unattended, not about how long they take,
+            # so the held browser is released from it.
+            browser.set_deadline(None)
             profile_id = "webbilling" if service_id == "mobile" else service_id
             profile = profile_for(profile_id)
             input_label = {
@@ -1095,6 +1170,9 @@ def resume_security_code(
             fetcher = build_receipt_fetcher(service_id, lease.browser, credentials)
             solved_browser = lease.browser
             solved_profile_dir = Path(lease.run_dir) / "profile"
+            # The owner has done their part; from here it is the app running
+            # unattended again, so it runs against a budget again.
+            lease.browser.set_deadline(SECURITY_RESUME_BUDGET_SECONDS)
             if interactive:
                 # The owner cleared the gate on the live page themselves. This
                 # only picks the acquisition back up on that same tab.
@@ -1128,6 +1206,10 @@ def resume_security_code(
         LOGGER.warning("Security code resume failed (%s)", resume_detail)
 
     if result is not None and getattr(result, "action_required", False):
+        # The gate is still up, so the browser goes back to the owner and the
+        # budget comes back off it.
+        if solved_browser is not None:
+            solved_browser.set_deadline(None)
         updated = dict(challenge)
         if interactive:
             # The gate is still up: either the piece is not in place yet or the

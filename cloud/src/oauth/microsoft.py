@@ -35,6 +35,9 @@ _OAUTH_VALUE = re.compile(r"^[A-Za-z0-9._~-]{20,2048}$")
 # as "!" and "*". Rejecting them here made every real callback fail with
 # MICROSOFT_OAUTH_RESPONSE_INVALID.
 _OAUTH_CODE = re.compile(r"^[\x20-\x7E]{20,4096}$")
+# Stop reusing an access token this long before Microsoft says it expires, so
+# a request never leaves here with a token that dies on the way.
+_ACCESS_TOKEN_SAFETY_MARGIN_SECONDS = 120.0
 
 
 class MicrosoftOAuthError(RuntimeError):
@@ -336,6 +339,8 @@ class MicrosoftOAuthManager:
         self.config = config
         self.token_store = token_store
         self.session = session or requests.Session()
+        self._cached_access_token = ""
+        self._cached_until = datetime.min.replace(tzinfo=timezone.utc)
 
     def status(self) -> dict[str, Any]:
         return {
@@ -410,6 +415,18 @@ class MicrosoftOAuthManager:
         return self.status()
 
     def access_token(self) -> str:
+        """Return a usable access token, reusing the live one where possible.
+
+        Minting one costs a Drive download, a decryption and a round trip to
+        Microsoft - about five to seven seconds. Every mail read asked for its
+        own, so a single acquisition spent close to a minute re-fetching a
+        token that was still valid. Microsoft states the lifetime in the
+        response, and only that lifetime is trusted.
+        """
+
+        now = datetime.now(timezone.utc)
+        if self._cached_access_token and now < self._cached_until:
+            return self._cached_access_token
         refresh_token = self.token_store.load_refresh_token()
         try:
             try:
@@ -438,9 +455,15 @@ class MicrosoftOAuthManager:
         if rotated:
             self.token_store.save_refresh_token(rotated)
             rotated = ""
+        self._cached_access_token = access_token
+        self._cached_until = now + timedelta(
+            seconds=_cacheable_seconds(payload.get("expires_in"))
+        )
         return access_token
 
     def disconnect(self) -> None:
+        self._cached_access_token = ""
+        self._cached_until = datetime.min.replace(tzinfo=timezone.utc)
         self.token_store.delete()
 
     def _token_request(self, form: dict[str, str]) -> dict[str, Any]:
@@ -487,6 +510,21 @@ class MicrosoftOAuthManager:
                 code="MICROSOFT_OAUTH_REJECTED",
             )
         return payload
+
+
+def _cacheable_seconds(expires_in: Any) -> float:
+    """How long a freshly minted access token may be reused.
+
+    Microsoft reports the lifetime; a margin is taken off it so a token is
+    never presented in the last moments of its validity. Anything missing or
+    unparseable means no reuse at all.
+    """
+
+    try:
+        lifetime = float(expires_in)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, min(lifetime, 3600.0) - _ACCESS_TOKEN_SAFETY_MARGIN_SECONDS)
 
 
 def _base64url(value: bytes) -> str:

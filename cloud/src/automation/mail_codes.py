@@ -4,6 +4,7 @@ import logging
 import re
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -120,9 +121,18 @@ class MailVerificationCodeReader:
         """Return the newest code, preferring one sent after this attempt."""
 
         threshold = requested_after.astimezone(timezone.utc) - _CLOCK_SKEW
-        deadline = self._now() + timedelta(seconds=timeout_seconds)
+        started_at = self._now()
+        deadline = started_at + timedelta(seconds=timeout_seconds)
+        # Measured against the owner's own mailbox: one round of this search
+        # costs about ten seconds. Recomputing the no-sender cut-off from "now"
+        # on every round pushed it forward each time, so a provider that never
+        # mails here still cost three rounds and two sleeps - about forty
+        # seconds of dead time on every single 携帯 acquisition. It is fixed
+        # from the start of the wait instead.
+        no_sender_deadline = started_at + timedelta(seconds=_NO_SENDER_GRACE_SECONDS)
         fallback = ""
         while True:
+            round_started_at = self._now()
             fresh, recent, seen_sender = self._read_codes(source, threshold=threshold)
             if fresh:
                 return fresh
@@ -131,10 +141,15 @@ class MailVerificationCodeReader:
                 # This provider has never mailed this mailbox, so it is sending
                 # the code somewhere else - by SMS, typically. Waiting out the
                 # full timeout only delays asking the owner for it.
-                deadline = min(
-                    deadline, self._now() + timedelta(seconds=_NO_SENDER_GRACE_SECONDS)
-                )
-            if self._now() >= deadline:
+                deadline = min(deadline, no_sender_deadline)
+            now = self._now()
+            if now >= deadline:
+                break
+            # A search of this mailbox is not instant, so a round started near
+            # the deadline runs straight past it and the owner waits for an
+            # answer that was already decided. Only start one that can finish.
+            round_cost = now - round_started_at
+            if now + timedelta(seconds=poll_seconds) + round_cost > deadline:
                 break
             self._sleep(poll_seconds)
         if fallback:
@@ -164,13 +179,17 @@ class MailVerificationCodeReader:
         for message in messages:
             if not self._sender_matches(message, source):
                 continue
-            seen_sender = True
             received = _parse_timestamp(message.get("receivedDateTime"))
             if received is None:
                 continue
             code = self._extract_code(message, source)
             if not code:
+                # The provider's own domain also sends billing notices and
+                # service announcements. One of those is not evidence that it
+                # mails codes here, and treating it as such kept the wait
+                # running for a code that was always going to arrive by SMS.
                 continue
+            seen_sender = True
             if received >= threshold:
                 self._retire_message(message)
                 return code, newest_recent, True
@@ -229,10 +248,8 @@ class MailVerificationCodeReader:
 
         merged: dict[str, dict[str, Any]] = {}
         failures = 0
-        for term in source.search_terms:
-            try:
-                messages = self._search_once(term)
-            except MailCodeUnavailableError:
+        for term, messages in self._search_all(source.search_terms):
+            if messages is None:
                 failures += 1
                 continue
             for index, message in enumerate(messages):
@@ -250,8 +267,52 @@ class MailVerificationCodeReader:
             reverse=True,
         )
 
-    def _search_once(self, term: str) -> list[dict[str, Any]]:
-        token = self._access_token_provider()
+    def _search_all(
+        self, terms: tuple[str, ...]
+    ) -> list[tuple[str, list[dict[str, Any]] | None]]:
+        """Query every term at once; None marks a term whose search failed.
+
+        A Graph ``$search`` over this mailbox takes seven to eight seconds. Run
+        one after another they doubled the length of every poll, and the whole
+        wait sits on the critical path of an acquisition the owner is watching.
+        Order is preserved so the merge stays deterministic.
+        """
+
+        if len(terms) < 2:
+            return [
+                (term, self._search_term_or_none(term)) for term in terms
+            ]
+        # Taken once, on this thread: letting each worker ask for its own could
+        # have two of them refresh the same token at the same time.
+        token = ""
+        try:
+            token = self._access_token_provider()
+        except Exception:
+            return [(term, None) for term in terms]
+        try:
+            with ThreadPoolExecutor(max_workers=len(terms)) as pool:
+                return list(
+                    zip(
+                        terms,
+                        pool.map(
+                            lambda term: self._search_term_or_none(term, token=token),
+                            terms,
+                        ),
+                    )
+                )
+        finally:
+            token = ""
+
+    def _search_term_or_none(
+        self, term: str, *, token: str = ""
+    ) -> list[dict[str, Any]] | None:
+        try:
+            return self._search_once(term, token=token)
+        except MailCodeUnavailableError:
+            return None
+
+    def _search_once(self, term: str, *, token: str = "") -> list[dict[str, Any]]:
+        token = token or self._access_token_provider()
         try:
             response = self._session.get(
                 f"{GRAPH_ROOT}/me/messages",

@@ -20,6 +20,28 @@ class BrowserAutomationError(RuntimeError):
     pass
 
 
+class AcquisitionDeadlineExceeded(BrowserAutomationError):
+    """The attempt ran out of the time it was given.
+
+    Every wait in the automation is bounded on its own, but they compose: a
+    sign-in wait, then a step loop, then a download wait, then the same again
+    after a verification code. Added up they reach tens of minutes, which on a
+    phone is indistinguishable from an acquisition that never ends.
+
+    The budget is held here rather than in each fetcher because every one of
+    those loops has to talk to the browser to make progress. Refusing to act
+    past the deadline therefore stops all of them - present and future - with
+    no loop left to forget.
+    """
+
+    code = "ACQUISITION_TIMEOUT"
+
+    def __init__(self, message: str = "") -> None:
+        super().__init__(
+            message or "取得の制限時間を超えたため、処理を打ち切りました。"
+        )
+
+
 ACCEPT_LANGUAGE = "ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7"
 # Large enough for a printed statement plus its base64 framing, bounded so a
 # runaway page cannot exhaust memory.
@@ -264,6 +286,41 @@ class ManagedBrowser:
         self.session_id: str | None = None
         self.uses_headless = True
         self.user_agent = ""
+        self._deadline: float | None = None
+
+    # -- Attempt budget -----------------------------------------------------
+
+    def set_deadline(self, seconds_from_now: float | None) -> None:
+        """Give this browser a wall-clock budget, or None to remove it.
+
+        A browser held open for the owner to clear a gate by hand has no
+        budget: they are the ones taking the time, and cutting them off would
+        throw away the sign-in they are in the middle of.
+        """
+
+        self._deadline = (
+            None if seconds_from_now is None else time.monotonic() + float(seconds_from_now)
+        )
+
+    def remaining_seconds(self) -> float | None:
+        if self._deadline is None:
+            return None
+        return self._deadline - time.monotonic()
+
+    def _check_deadline(self) -> None:
+        remaining = self.remaining_seconds()
+        if remaining is not None and remaining <= 0:
+            raise AcquisitionDeadlineExceeded()
+
+    def _bounded(self, timeout: float) -> float:
+        """Clamp one call so it cannot run past the budget on its own."""
+
+        remaining = self.remaining_seconds()
+        if remaining is None:
+            return timeout
+        # Never zero: a call given no time at all fails as a protocol timeout,
+        # which reads like a browser fault rather than a spent budget.
+        return max(1.0, min(float(timeout), remaining))
 
     def ensure_started(self) -> None:
         if self.process is not None and self.process.poll() is not None:
@@ -461,6 +518,9 @@ class ManagedBrowser:
         return self.connection.send("Target.getTargets").get("targetInfos", [])
 
     def switch_to_page(self, predicate: Callable[[dict[str, Any]], bool]) -> dict[str, Any] | None:
+        # get_targets starts a browser if none is running. Past the budget that
+        # would launch a whole new Chrome for an attempt already over.
+        self._check_deadline()
         pages = [
             target for target in self.get_targets()
             if target.get("type") == "page"
@@ -476,15 +536,19 @@ class ManagedBrowser:
         return target
 
     def navigate(self, url: str, wait_seconds: float = 1.0) -> None:
+        self._check_deadline()
         session_id = self.ensure_page()
         assert self.connection is not None
         self.connection.send("Page.navigate", {"url": url}, session_id=session_id)
-        time.sleep(wait_seconds)
+        time.sleep(min(wait_seconds, self._bounded(wait_seconds)))
 
     def evaluate(self, expression: str, *, timeout: float = 30) -> Any:
+        self._check_deadline()
         session_id = self.ensure_page()
         assert self.connection is not None
-        return self._evaluate_in_session(expression, session_id=session_id, timeout=timeout)
+        return self._evaluate_in_session(
+            expression, session_id=session_id, timeout=self._bounded(timeout)
+        )
 
     def current_page_target(self) -> dict[str, Any]:
         """Return the attached live page without starting or reattaching a browser.
@@ -515,9 +579,12 @@ class ManagedBrowser:
     def evaluate_current_page(self, expression: str, *, timeout: float = 30) -> Any:
         """Evaluate only in the currently attached live target."""
 
+        self._check_deadline()
         self.current_page_target()
         assert self.session_id is not None
-        return self._evaluate_in_session(expression, session_id=self.session_id, timeout=timeout)
+        return self._evaluate_in_session(
+            expression, session_id=self.session_id, timeout=self._bounded(timeout)
+        )
 
     def _evaluate_in_session(self, expression: str, *, session_id: str, timeout: float) -> Any:
         assert self.connection is not None
@@ -584,6 +651,7 @@ class ManagedBrowser:
                 pass
 
     def click_at(self, x: int, y: int) -> None:
+        self._check_deadline()
         session_id = self.ensure_page()
         self._click_in_session(session_id, x, y)
 
@@ -693,6 +761,7 @@ class ManagedBrowser:
             time.sleep(delay_seconds)
 
     def press_key(self, key: str = "Enter") -> None:
+        self._check_deadline()
         session_id = self.ensure_page()
         self._press_key_in_session(session_id, key)
 
@@ -750,6 +819,9 @@ class ManagedBrowser:
         return self.session_id
 
     def print_to_pdf(self, file_path: Path, **options: Any) -> Path:
+        # This is the statement itself for the services that print the page,
+        # so it is checked before it starts rather than cut off part-way.
+        self._check_deadline()
         session_id = self.ensure_page()
         assert self.connection is not None
         result = self.connection.send(
@@ -826,7 +898,9 @@ class ManagedBrowser:
 
     def wait_for_download(self, extension: str, marker_time: float, timeout_seconds: float = 90) -> Path | None:
         suffix = "." + extension.lower().lstrip(".")
-        deadline = time.time() + timeout_seconds
+        # A download that would finish after the attempt's budget cannot be
+        # saved anyway, so it is not worth waiting the full timeout for.
+        deadline = time.time() + self._bounded(timeout_seconds)
         while time.time() < deadline:
             candidates = [
                 child for child in self.download_dir.iterdir()

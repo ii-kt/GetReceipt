@@ -1089,6 +1089,87 @@ class StreamlitAppTest(unittest.TestCase):
         # A genuine breakage still reads as a failure.
         self.assertIn("gr-card--failed", next(c for c in cards if "エポスカード" in c))
 
+    def test_mobile_reads_the_same_way_when_web_billing_has_not_issued_it(self) -> None:
+        """携帯 is billed mid-month, so the current month is normally absent.
+
+        It used to sign in, send an SMS, wait for a code and only then report
+        a failure for a month that simply did not exist yet.
+        """
+
+        storage = FakeDriveStorage([])
+
+        def acquire(**kwargs):
+            if kwargs["service_id"] != "mobile":
+                return SimpleNamespace(success=True, file_name="x.pdf", failure=None)
+            return SimpleNamespace(
+                success=False,
+                file_name="",
+                failure=SimpleNamespace(
+                    code="WEBBILLING_MONTH_NOT_ISSUED",
+                    message="Webビリングに2026年8月分の証明書がまだ発行されていません。",
+                    detail="発行済みの最新は2026年7月分です。",
+                ),
+            )
+
+        app = self.app()
+        with (
+            patch.object(DriveStorage, "from_secrets", return_value=storage),
+            patch("src.automation.browser_session.ManagedBrowser"),
+            patch("src.automation.providers.build_receipt_fetcher", return_value=object()),
+            patch("src.workflows.auto_acquisition.run_auto_acquisition", side_effect=acquire),
+        ):
+            app.run(timeout=20)
+            next(b for b in app.button if "自動取得" in b.label).click().run(timeout=60)
+
+        cards = [str(item.value) for item in app.markdown if "gr-card" in str(item.value)]
+        mobile = next(c for c in cards if "NTTファイナンス" in c)
+
+        self.assertIn("gr-card--not_issued", mobile)
+        self.assertNotIn("WEBBILLING_MONTH_NOT_ISSUED", mobile)
+        self.assertNotIn("失敗", mobile)
+
+    def test_an_attempt_that_ran_out_of_time_ends_the_batch(self) -> None:
+        """The complaint this budget exists for: 携帯 that never finishes.
+
+        Whatever the provider does, the run has to arrive at an answer and let
+        the owner act on it, rather than sitting on 取得中 indefinitely.
+        """
+
+        storage = FakeDriveStorage([])
+
+        def acquire(**kwargs):
+            if kwargs["service_id"] != "mobile":
+                return SimpleNamespace(success=True, file_name="x.pdf", failure=None)
+            return SimpleNamespace(
+                success=False,
+                file_name="",
+                failure=SimpleNamespace(
+                    code="ACQUISITION_TIMEOUT",
+                    message="取得の制限時間内に終わらなかったので中止しました。",
+                    detail="請求元の応答が遅いか、想定外の画面で止まっていました。",
+                ),
+            )
+
+        app = self.app()
+        with (
+            patch.object(DriveStorage, "from_secrets", return_value=storage),
+            patch("src.automation.browser_session.ManagedBrowser"),
+            patch("src.automation.providers.build_receipt_fetcher", return_value=object()),
+            patch("src.workflows.auto_acquisition.run_auto_acquisition", side_effect=acquire),
+        ):
+            app.run(timeout=20)
+            next(b for b in app.button if "自動取得" in b.label).click().run(timeout=60)
+
+        cards = [str(item.value) for item in app.markdown if "gr-card" in str(item.value)]
+        mobile = next(c for c in cards if "NTTファイナンス" in c)
+
+        # Not 取得中: the run reached an outcome and released the screen.
+        self.assertNotIn("gr-card--running", mobile)
+        self.assertIn("gr-card--failed", mobile)
+        self.assertIn("制限時間", mobile)
+        # And the owner is offered the retry, so the month is not a dead end.
+        self.assertTrue(any("自動取得" in b.label for b in app.button))
+
 
 if __name__ == "__main__":
     unittest.main()

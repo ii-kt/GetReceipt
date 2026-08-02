@@ -202,6 +202,84 @@ class MailVerificationCodeReaderTest(unittest.TestCase):
 
         self.assertLessEqual(sum(sleeps), 25)
 
+    def test_the_search_itself_counts_against_the_give_up_point(self) -> None:
+        """Measured on the owner's mailbox: one round of this search costs ~10s.
+
+        The cut-off used to be recomputed from "now" after every round, so it
+        moved forward each time and a provider that never mails here still
+        cost three rounds - about forty seconds of dead time on every single
+        acquisition, while the owner watched.
+        """
+
+        clock = [NOW]
+        session = _FakeSession([])
+        real_get = session.get
+
+        def slow_get(url, **kwargs):
+            clock[0] = clock[0] + timedelta(seconds=10)
+            return real_get(url, **kwargs)
+
+        session.get = slow_get
+        reader = MailVerificationCodeReader(
+            lambda: "delegated-access-token",
+            session=session,
+            now=lambda: clock[0],
+            sleep=lambda seconds: clock.__setitem__(
+                0, clock[0] + timedelta(seconds=seconds)
+            ),
+        )
+
+        with self.assertRaises(MailCodeUnavailableError):
+            reader.wait_for_code(
+                SOURCE,
+                requested_after=NOW,
+                timeout_seconds=90,
+                poll_seconds=5,
+            )
+
+        self.assertLessEqual((clock[0] - NOW).total_seconds(), 20)
+        self.assertEqual(1, session.requests)
+
+    def test_a_billing_mail_is_not_proof_the_provider_sends_codes_here(self) -> None:
+        """携帯's code goes to SMS, but NTT Finance also mails invoices.
+
+        Counting any mail from the provider's domain as "it mails codes here"
+        made the wait run its full length every time, for a code that was
+        never going to arrive.
+        """
+
+        source = VERIFICATION_CODE_SOURCES["mobile"]
+        notice = {
+            "id": "billing-notice",
+            "subject": "Webビリング ご請求金額のご案内",
+            "from": {"emailAddress": {"address": "webbilling_info@ntt-finance.co.jp"}},
+            "receivedDateTime": (NOW - timedelta(minutes=1))
+            .isoformat()
+            .replace("+00:00", "Z"),
+            "body": {
+                "contentType": "text",
+                "content": "ログインにはワンタイムパスワードが必要になる場合があります。",
+            },
+        }
+        sleeps: list[float] = []
+        reader, _ = _reader([notice], sleep_calls=sleeps)
+        clock = [NOW]
+        reader._now = lambda: clock[0]
+        reader._sleep = lambda seconds: (
+            sleeps.append(seconds),
+            clock.__setitem__(0, clock[0] + timedelta(seconds=seconds)),
+        )[0]
+
+        with self.assertRaises(MailCodeUnavailableError):
+            reader.wait_for_code(
+                source,
+                requested_after=NOW,
+                timeout_seconds=90,
+                poll_seconds=5,
+            )
+
+        self.assertLessEqual(sum(sleeps), 20)
+
     def test_keeps_waiting_when_this_provider_does_mail_the_code(self) -> None:
         """An old message proves the route works, so a new one is worth waiting for."""
 

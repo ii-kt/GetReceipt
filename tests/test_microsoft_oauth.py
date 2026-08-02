@@ -212,6 +212,85 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class AccessTokenReuseTest(unittest.TestCase):
+    """Minting a token costs a Drive read, a decryption and a round trip.
+
+    Every mail read asked for its own, so one acquisition spent close to a
+    minute re-fetching a token that was still perfectly valid.
+    """
+
+    class _Session:
+        def __init__(self, *, expires_in) -> None:
+            self.mints = 0
+            self.expires_in = expires_in
+
+        def post(self, _url, *, data, headers, timeout):
+            self.mints += 1
+            payload = {"access_token": f"access-token-{self.mints:03d}-value"}
+            if self.expires_in is not None:
+                payload["expires_in"] = self.expires_in
+            return FakeResponse(payload)
+
+    def _manager(self, session):
+        key = Fernet.generate_key().decode("ascii")
+        temp = tempfile.mkdtemp()
+        store = MicrosoftTokenStore(
+            database_path=Path(temp) / "jobs.sqlite3",
+            owner_id="owner-1",
+            encryption_key=key,
+        )
+        store.save_refresh_token("refresh-token-value-long-enough-to-store")
+        return MicrosoftOAuthManager(
+            config=MicrosoftOAuthConfig(
+                client_id="11111111-1111-1111-1111-111111111111",
+                client_secret="confidential-client-secret-value",
+                redirect_uri="https://get-receipt.streamlit.app/",
+                encryption_key=key,
+            ),
+            token_store=store,
+            session=session,
+        )
+
+    def test_a_live_token_is_reused_instead_of_reminted(self) -> None:
+        session = self._Session(expires_in=3600)
+        manager = self._manager(session)
+
+        first = manager.access_token()
+        second = manager.access_token()
+
+        self.assertEqual(first, second)
+        self.assertEqual(1, session.mints)
+
+    def test_a_token_close_to_expiry_is_replaced(self) -> None:
+        """Never hand out a token that could die on the way to Graph."""
+
+        session = self._Session(expires_in=60)
+        manager = self._manager(session)
+
+        manager.access_token()
+        manager.access_token()
+
+        self.assertEqual(2, session.mints)
+
+    def test_an_unstated_lifetime_is_never_assumed(self) -> None:
+        session = self._Session(expires_in=None)
+        manager = self._manager(session)
+
+        manager.access_token()
+        manager.access_token()
+
+        self.assertEqual(2, session.mints)
+
+    def test_disconnecting_drops_the_token_it_was_holding(self) -> None:
+        session = self._Session(expires_in=3600)
+        manager = self._manager(session)
+        manager.access_token()
+
+        manager.disconnect()
+
+        self.assertEqual("", manager._cached_access_token)
+
+
 class MicrosoftAuthorizationCodeShapeTest(unittest.TestCase):
     """A real Microsoft authorization code is opaque and contains symbols."""
 

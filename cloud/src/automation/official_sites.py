@@ -126,6 +126,41 @@ def _unissued_month_error(
     )
 
 
+def _webbilling_unissued_month_error(
+    action: dict[str, Any],
+    *,
+    year: int,
+    month: int,
+) -> AcquisitionError:
+    """Say plainly when NTT Finance has not issued this month's certificate.
+
+    Web billing lists only the months it has already billed. Asking for the
+    current one before the bill is cut is the ordinary state of things, and
+    calling it a failure sent the owner hunting for a fault that is not there.
+    """
+
+    months: list[tuple[int, int]] = []
+    for value in action.get("availableMonths") or ():
+        parsed = re.fullmatch(r"(20\d{2})/(\d{1,2})", str(value).strip())
+        if parsed:
+            months.append((int(parsed.group(1)), int(parsed.group(2))))
+    newest = max(months, default=None)
+    if newest is not None and (year, month) > newest:
+        return AcquisitionError(
+            f"Webビリングに{year}年{month}月分の証明書がまだ発行されていません。",
+            code="WEBBILLING_MONTH_NOT_ISSUED",
+            advice=(
+                f"発行済みの最新は{newest[0]}年{newest[1]}月分です。"
+                "請求が確定してから再実行してください。"
+            ),
+        )
+    return _action_error(
+        action,
+        f"Webビリングで{year}年{month}月分の証明書を見つけられませんでした。",
+        "YEAR_MONTH_NOT_AVAILABLE",
+    )
+
+
 def _login_timeout_advice(
     summary: dict[str, Any],
     *,
@@ -799,14 +834,37 @@ class WebBillingAutoFetcher:
         metadata_texts: list[str] = []
         downloaded: Path | None = None
         last_action: dict[str, Any] = {}
+        repeated_step = ""
+        repeats = 0
         for _ in range(28):
             last_action = self.browser.evaluate(build_webbilling_step_expression(year, month), timeout=30) or {}
             logs.extend(str(line) for line in last_action.get("logs") or [])
             if last_action.get("metadataText"):
                 metadata_texts.append(str(last_action["metadataText"]))
+            if last_action.get("code") == "YEAR_MONTH_NOT_AVAILABLE":
+                raise _webbilling_unissued_month_error(last_action, year=year, month=month)
             if last_action.get("continue"):
+                # Scrolling the list repeats by design and stops itself at the
+                # bottom, so it is not counted as a stalled step.
                 time.sleep(min(float(last_action.get("waitMs") or 900) / 1000, 1.8))
                 continue
+            # A click that keeps being asked for is not progressing: the page it
+            # reached is one this cannot read. Pressing it another twenty times
+            # only spends the attempt's whole budget to arrive back here.
+            step = str(last_action.get("code") or "")
+            repeats = repeats + 1 if step and step == repeated_step else 0
+            repeated_step = step
+            if repeats >= 4:
+                stalled = _action_error(
+                    last_action,
+                    f"Webビリングの操作「{step}」が繰り返しになり進みませんでした。",
+                    "WEBBILLING_STEP_STALLED",
+                )
+                raise AcquisitionError(
+                    f"Webビリングの操作「{step}」が繰り返しになり進みませんでした。",
+                    code="WEBBILLING_STEP_STALLED",
+                    advice=str(getattr(stalled, "advice", "") or ""),
+                )
             if last_action.get("click"):
                 marker = time.time()
                 click = last_action["click"]

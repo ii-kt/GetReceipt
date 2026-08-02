@@ -7,6 +7,8 @@ from enum import Enum
 from typing import Any, Mapping, Protocol
 from urllib.parse import urlsplit
 
+from .browser_session import AcquisitionDeadlineExceeded
+
 
 class AuthChallengeClassification(str, Enum):
     CODE_INPUT = "code_input"
@@ -278,6 +280,10 @@ def _validated_current_page(
     try:
         target = browser.current_page_target()
         summary = browser.current_page_summary()
+    except AcquisitionDeadlineExceeded:
+        # A spent budget is not a page fault, and calling it one sends the
+        # owner looking for a broken sign-in that is not broken.
+        raise
     except Exception:
         raise AuthChallengeSubmissionError(
             "追加認証用の現在ページを確認できませんでした。"
@@ -396,6 +402,10 @@ def _safe_evaluate(
 ) -> Mapping[str, Any]:
     try:
         result = browser.evaluate_current_page(expression, timeout=10) or {}
+    except AcquisitionDeadlineExceeded:
+        # Raised before the expression is ever sent, so it carries no code and
+        # is safe to report as what it is.
+        raise
     except Exception:
         # Browser errors may include the evaluated expression. Never propagate
         # those diagnostics because the submission expression contains a code.

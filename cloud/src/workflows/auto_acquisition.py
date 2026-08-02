@@ -46,11 +46,17 @@ LOGGER = logging.getLogger(__name__)
 NOT_ISSUED_CODES = frozenset(
     {
         "COMMUFA_MONTH_NOT_ISSUED",
+        "WEBBILLING_MONTH_NOT_ISSUED",
         "TOKUTEN_GRAPH_ATTACHMENT_NOT_FOUND",
         "ATTACHMENT_NOT_FOUND",
         "MESSAGE_NOT_FOUND",
     }
 )
+
+# The whole attempt is given a wall-clock budget. Running out is its own
+# outcome: nothing is broken, there simply was not time, and the owner needs
+# to be told that rather than shown a provider error that never happened.
+ACQUISITION_TIMEOUT_CODE = "ACQUISITION_TIMEOUT"
 
 _ACTION_REQUIRED_CHALLENGE_KINDS = {
     "verification_code",
@@ -222,6 +228,16 @@ def _run_auto_acquisition_unlocked(
             "Acquisition fetch failed for %s (%s)", service_id, detail
         )
         code = _error_code(error, "FETCH_FAILED")
+        if code == ACQUISITION_TIMEOUT_CODE:
+            return failed(
+                code=code,
+                message="取得の制限時間内に終わらなかったので中止しました。",
+                stage=Stage.FETCHING,
+                detail=(
+                    "請求元の応答が遅いか、想定外の画面で止まっていました。"
+                    "もう一度実行すると、続きからではなく最初からやり直します。"
+                ),
+            )
         if code in NOT_ISSUED_CODES:
             # The provider has not billed this month yet. That is the ordinary
             # state of the current month, not a fault, so its own wording is
