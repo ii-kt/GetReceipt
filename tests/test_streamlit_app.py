@@ -1112,6 +1112,160 @@ class StreamlitAppTest(unittest.TestCase):
         markdown = "\n".join(item.value for item in app.markdown)
         self.assertIn("4件すべてのPDFをGoogle Driveで確認しました", markdown)
 
+    def test_clearing_a_gate_is_kept_even_when_the_month_is_not_billed(self) -> None:
+        """Answering the check by hand has to mean answering it once.
+
+        The clearance the provider grants lives in that browser's cookies, and
+        keeping them only on success threw them away in the ordinary case: the
+        owner answers, the sign-in goes through, and the month turns out not to
+        be billed yet. The next attempt then put the same gate back in front of
+        them.
+        """
+
+        storage = FakeDriveStorage(
+            [
+                receipt_file("20260705", "株式会社エポスカード", 87560),
+                receipt_file("20260812", "中部テレコミュニケーション株式会社", 10002),
+                receipt_file("20260812", "フラットエナジー株式会社", 10003),
+            ]
+        )
+        registry = FakeBrowserLeaseRegistry()
+        browser = MagicMock()
+        browser.current_page_target.return_value = {
+            "url": "https://cfg.smt.docomo.ne.jp/auth/cgi/anidlogin"
+        }
+        profile_store = MagicMock()
+
+        class GateFetcher:
+            def resume_after_interactive_challenge(self, target_month):
+                return object()
+
+        calls = 0
+
+        def acquire(**kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return SimpleNamespace(
+                    success=False,
+                    action_required=True,
+                    challenge=SimpleNamespace(
+                        kind="interactive",
+                        message="人間であることの確認が表示されました。",
+                    ),
+                    failure=None,
+                )
+            kwargs["fetch_statement"](kwargs["target_month"])
+            # Cleared the gate, signed in - and the month simply is not there.
+            return SimpleNamespace(
+                success=False,
+                action_required=False,
+                file_name="",
+                failure=SimpleNamespace(
+                    code="WEBBILLING_MONTH_NOT_ISSUED",
+                    message="まだ発行されていません。",
+                    detail="",
+                ),
+            )
+
+        app = self.app()
+        # The profile archive is encrypted with the same key as the mail token,
+        # so without this section the app never builds a store to save into.
+        app.secrets["microsoft_graph"] = {
+            "client_id": "11111111-1111-1111-1111-111111111111",
+            "client_secret": "confidential-client-secret-value",
+            "encryption_key": Fernet.generate_key().decode("ascii"),
+        }
+        with (
+            patch.object(DriveStorage, "from_secrets", return_value=storage),
+            patch("src.automation.browser_session.ManagedBrowser", return_value=browser),
+            patch(
+                "src.automation.providers.build_receipt_fetcher",
+                return_value=GateFetcher(),
+            ),
+            patch("src.workflows.auto_acquisition.run_auto_acquisition", side_effect=acquire),
+            patch("src.automation.security_challenge.browser_lease_registry", registry),
+            patch("src.ui.live_view.render_live_view"),
+            # The app re-imports this name on every run, so patching it at the
+            # source is what the running script picks up.
+            patch(
+                "src.storage.browser_profile_store.BrowserProfileStore",
+                return_value=profile_store,
+            ),
+            patch("src.ui.graph_link.render_graph_connection", return_value=True),
+            patch("src.storage.status_store.ServiceStatusStore.load", return_value={}),
+            patch("src.storage.status_store.ServiceStatusStore.record"),
+            patch("src.storage.status_store.ServiceStatusStore.clear"),
+        ):
+            app.run(timeout=20)
+            next(b for b in app.button if "自動取得" in b.label).click().run(timeout=20)
+            # Named for what it is: there is no piece to drag on a bot check.
+            open_button = next(b for b in app.button if b.label == "🧩 確認チェックを開く")
+            open_button.click().run(timeout=20)
+            next(
+                b for b in app.button if b.label == "🧩 解除して自動取得を続ける"
+            ).click().run(timeout=20)
+
+        self.assertEqual([], list(app.exception))
+        profile_store.save.assert_called()
+        self.assertEqual("mobile", profile_store.save.call_args.args[0])
+
+    def test_a_gate_answered_by_hand_does_not_spend_a_sign_in(self) -> None:
+        """It sent the owner nothing, so it cost none of what the cap rations.
+
+        Counting it meant two goes at a bot check locked 携帯 out for a
+        quarter of an hour without a single code having been sent.
+        """
+
+        storage = FakeDriveStorage(
+            [
+                receipt_file("20260705", "株式会社エポスカード", 87560),
+                receipt_file("20260812", "中部テレコミュニケーション株式会社", 10002),
+                receipt_file("20260812", "フラットエナジー株式会社", 10003),
+            ]
+        )
+        registry = FakeBrowserLeaseRegistry()
+        browser = MagicMock()
+        browser.current_page_target.return_value = {
+            "url": "https://cfg.smt.docomo.ne.jp/auth/cgi/anidlogin"
+        }
+
+        class GateFetcher:
+            def resume_after_interactive_challenge(self, target_month):
+                return object()
+
+        def acquire(**kwargs):
+            return SimpleNamespace(
+                success=False,
+                action_required=True,
+                challenge=SimpleNamespace(
+                    kind="interactive", message="人間であることの確認です。"
+                ),
+                failure=None,
+            )
+
+        app = self.app()
+        with (
+            patch.object(DriveStorage, "from_secrets", return_value=storage),
+            patch("src.automation.browser_session.ManagedBrowser", return_value=browser),
+            patch(
+                "src.automation.providers.build_receipt_fetcher",
+                return_value=GateFetcher(),
+            ),
+            patch("src.workflows.auto_acquisition.run_auto_acquisition", side_effect=acquire),
+            patch("src.automation.security_challenge.browser_lease_registry", registry),
+            patch("src.ui.live_view.render_live_view"),
+            patch("src.storage.status_store.ServiceStatusStore.load", return_value={}),
+            patch("src.storage.status_store.ServiceStatusStore.record"),
+            patch("src.storage.status_store.ServiceStatusStore.clear"),
+        ):
+            app.run(timeout=20)
+            next(b for b in app.button if "自動取得" in b.label).click().run(timeout=20)
+
+        self.assertEqual([], list(app.exception))
+        counts = app.session_state["getreceipt_signin_attempts"]
+        self.assertEqual({}, {key: value for key, value in counts.items() if value})
+
     def test_an_unfinished_puzzle_keeps_the_same_browser_and_reopens(self) -> None:
         """Pressing 解除 too early must not throw the sign-in away.
 

@@ -1059,6 +1059,13 @@ def execute_next_service(storage: DriveStorage, batch: dict[str, Any]) -> None:
             # about the app spinning unattended, not about how long they take,
             # so the held browser is released from it.
             browser.set_deadline(None)
+            if challenge_kind in INTERACTIVE_CHALLENGE_KINDS:
+                # A gate the owner answers on the page sends them nothing: no
+                # code was mailed or texted, so this attempt cost none of what
+                # the cap exists to ration. Counting it meant two goes at a
+                # puzzle or a bot check locked the service out for a quarter
+                # of an hour, for no code at all.
+                clear_signin_attempts(service_id, target_month)
             profile_id = "webbilling" if service_id == "mobile" else service_id
             profile = profile_for(profile_id)
             input_label = {
@@ -1265,15 +1272,19 @@ def resume_security_code(
         status_box.update(label="確認コードを再確認してください。", state="error")
         st.rerun()
 
-    # Whatever the provider granted for clearing this challenge lives in the
-    # cookies of that browser. Keep them, so the next month is not challenged
-    # from scratch again.
+    # Whatever the provider granted for clearing this gate lives in the cookies
+    # of that browser. Keep them whenever the gate came down - not only when
+    # the statement was found.
+    #
+    # Requiring success threw the clearance away in the ordinary case: the
+    # owner answers the check by hand, the sign-in goes through, and the month
+    # turns out not to be billed yet. Nothing was wrong, but the cookies went
+    # with the run, so the very next attempt put the same check in front of
+    # them again. Answering it once has to mean once.
     if (
         profile_store is not None
         and solved_browser is not None
         and solved_profile_dir is not None
-        and result is not None
-        and getattr(result, "success", False)
     ):
         try:
             solved_browser.close(clear_profile=False)
