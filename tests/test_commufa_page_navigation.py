@@ -68,6 +68,40 @@ BILLING_TOP = _HEAD + """
   <section><div><a href="/join/s/CW40004">過去の請求額の一覧</a></div></section>
 """ + _TAIL
 
+PAST_BILL_LIST = _HEAD + """
+  <h1>過去の請求額の一覧</h1>
+  <table><thead><tr><th>ご利用年月</th><th>請求金額</th><th></th></tr></thead>
+  <tbody>
+    <tr><td>2026年7月</td><td>6,710円</td>
+      <td><a href="/join/s/CW40001?meiym=202607">利用明細</a>
+          <a href="/join/s/calls?meiym=202607">通話明細</a></td></tr>
+    <tr><td>2026年6月</td><td>6,710円</td>
+      <td><a href="/join/s/CW40001?meiym=202606">利用明細</a>
+          <a href="/join/s/calls?meiym=202606">通話明細</a></td></tr>
+    <tr><td>2026年5月</td><td>6,710円</td>
+      <td><a href="/join/s/CW40001?meiym=202605">利用明細</a></td></tr>
+  </tbody></table>
+""" + _TAIL
+
+# The same list without the requested month, which is the ordinary state of a
+# month the provider has not billed yet.
+PAST_BILL_LIST_WITHOUT_TARGET = _HEAD + """
+  <h1>過去の請求額の一覧</h1>
+  <table><thead><tr><th>ご利用年月</th><th>請求金額</th><th></th></tr></thead>
+  <tbody>
+    <tr><td>2026年5月</td><td>6,710円</td>
+      <td><a href="/join/s/CW40001?meiym=202605">利用明細</a></td></tr>
+    <tr><td>2026年4月</td><td>6,710円</td>
+      <td><a href="/join/s/CW40001?meiym=202604">利用明細</a></td></tr>
+  </tbody></table>
+""" + _TAIL
+
+USAGE_DETAIL = _HEAD + """
+  <h1>利用料金のお知らせ</h1>
+  <p>ご利用年月 2026年6月分</p><p>請求金額 6,710円</p>
+  <section><div><a href="/join/s/CW40001print?meiym=202606">印刷用ページ</a></div></section>
+""" + _TAIL
+
 
 @unittest.skipUnless(find_browser_executable(), "no browser installed")
 class CommufaStepNavigationTest(unittest.TestCase):
@@ -124,6 +158,30 @@ class CommufaStepNavigationTest(unittest.TestCase):
 
         self.assertEqual("CLICK_PAST_BILL_LIST", action.get("code"))
         self.assertIn("CW40004", (action.get("logs") or [""])[0])
+
+    def test_the_requested_month_is_opened_from_the_list(self) -> None:
+        """And not the row above it, nor the call log beside it."""
+
+        action = self._step("past-bills", PAST_BILL_LIST)
+
+        self.assertEqual("CLICK_USAGE_DETAIL", action.get("code"))
+        log = (action.get("logs") or [""])[0]
+        self.assertIn("2026年6月", log)
+        self.assertNotIn("2026年7月", log)
+
+    def test_a_month_not_in_the_list_is_reported_as_unissued(self) -> None:
+        action = self._step("past-bills-missing", PAST_BILL_LIST_WITHOUT_TARGET)
+
+        self.assertEqual("YEAR_MONTH_NOT_AVAILABLE", action.get("code"))
+        # The months it could see are what turns this into 未発行 rather than
+        # a failure, so they have to come back with it.
+        self.assertIn("2026/05", action.get("availableMonths") or [])
+
+    def test_the_print_view_is_opened_on_the_detail_page(self) -> None:
+        action = self._step("usage-detail", USAGE_DETAIL)
+
+        self.assertEqual("CLICK_PRINT_PAGE", action.get("code"))
+        self.assertTrue(action.get("clickedInPage"))
 
 
 if __name__ == "__main__":
