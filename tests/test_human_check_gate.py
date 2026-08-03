@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import sys
 import unittest
+import unittest.mock
 from pathlib import Path
 
 
@@ -138,6 +139,86 @@ class HumanCheckDetectionTest(unittest.TestCase):
         # call anything a code prompt, so what this pins down is that the bot
         # check is not what claimed the page.
         self.assertNotIn("人間", str(result.get("reason") or ""))
+
+
+class StalledSignInTest(unittest.TestCase):
+    """Matching wording is not enough on its own.
+
+    A check phrased some way nobody anticipated puts the run straight back to
+    spending two minutes and reporting LOGIN_REQUIRED. What the page says is
+    not dependable; that it is on the provider's own sign-in host, asking
+    somebody something, and offering nothing this can drive - that is.
+    """
+
+    class _Browser:
+        """Stuck on the d-account host with nothing the script can drive."""
+
+        def __init__(self) -> None:
+            self.evaluations = 0
+
+        def page_summary(self) -> dict:
+            return {
+                "url": "https://cfg.smt.docomo.ne.jp/auth/cgi/anidlogin",
+                "title": "dアカウント",
+                "text": "Additional verification required before continuing.",
+                "passwordFields": 0,
+            }
+
+        def evaluate(self, expression: str, **_kwargs):
+            self.evaluations += 1
+            return {
+                "attempted": False,
+                "code": "LOGIN_STEP_NOT_FOUND",
+                "reason": "自動で進められるWebビリング/dアカウントのログイン操作を見つけられませんでした。",
+            }
+
+    def test_a_page_that_offers_nothing_goes_to_the_owner(self) -> None:
+        import src.automation.official_sites as sites
+
+        browser = self._Browser()
+        fetcher = WebBillingAutoFetcher(browser)  # type: ignore[arg-type]
+
+        with unittest.mock.patch.object(sites, "_STALLED_LOGIN_SECONDS", 0.0):
+            with unittest.mock.patch.object(sites.time, "sleep"):
+                with self.assertRaises(Exception) as raised:
+                    fetcher._wait_for_login(timeout_seconds=30)
+
+        self.assertEqual("SECURITY_CHALLENGE", getattr(raised.exception, "code", ""))
+        self.assertEqual(
+            "interactive", str(getattr(raised.exception, "challenge_kind", ""))
+        )
+        # And it stopped early rather than sitting out the whole timeout.
+        self.assertLessEqual(browser.evaluations, 3)
+
+    def test_a_password_held_back_is_not_a_stall(self) -> None:
+        """The one-submission guard also reports no progress.
+
+        There the provider really is still working, and handing the page over
+        would interrupt a sign-in that was going fine.
+        """
+
+        import src.automation.official_sites as sites
+
+        class _Waiting(self._Browser):
+            def evaluate(self, expression: str, **_kwargs):
+                self.evaluations += 1
+                return {
+                    "attempted": True,
+                    "code": "SUBMIT_PASSWORD",
+                    "click": {"x": 1, "y": 1},
+                }
+
+        browser = _Waiting()
+        fetcher = WebBillingAutoFetcher(browser)  # type: ignore[arg-type]
+        browser.click_at = lambda x, y: None  # type: ignore[attr-defined]
+
+        with unittest.mock.patch.object(sites, "_STALLED_LOGIN_SECONDS", 0.0):
+            with unittest.mock.patch.object(sites.time, "sleep"):
+                with self.assertRaises(Exception) as raised:
+                    fetcher._wait_for_login(timeout_seconds=0.5)
+
+        # Timed out waiting for the provider, not handed over as a gate.
+        self.assertNotEqual("SECURITY_CHALLENGE", getattr(raised.exception, "code", ""))
 
 
 class HumanCheckResumeTest(unittest.TestCase):

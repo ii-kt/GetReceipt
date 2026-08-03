@@ -161,6 +161,20 @@ def _webbilling_unissued_month_error(
     )
 
 
+# The sign-in hosts Web billing legitimately walks through. A page stuck here
+# is the provider asking something; anywhere else it is a redirect in flight.
+_WEBBILLING_SECURITY_HOSTS = frozenset(
+    {
+        "webbilling.ntt-finance.co.jp",
+        "id.smt.docomo.ne.jp",
+        "cfg.smt.docomo.ne.jp",
+    }
+)
+# Long enough that a page still rendering is never mistaken for one that has
+# stopped, short enough that the owner is not left watching a spinner.
+_STALLED_LOGIN_SECONDS = 20.0
+
+
 def _login_timeout_advice(
     summary: dict[str, Any],
     *,
@@ -996,6 +1010,9 @@ class WebBillingAutoFetcher:
         # here, so the final page never shows why it was refused.
         offsite_summary: dict[str, Any] = {}
         trail: list[str] = []
+        # When the page stops offering anything this can drive, waiting out the
+        # rest of the timeout only ends in a failure the owner cannot act on.
+        stalled_since = 0.0
         while time.time() < deadline:
             summary = self.browser.page_summary()
             host = urlsplit(str(summary.get("url") or "")).hostname or ""
@@ -1015,7 +1032,34 @@ class WebBillingAutoFetcher:
                 auto_login.get("reason") or auto_login.get("code") or ""
             )
             if self._apply_login_result(auto_login):
+                stalled_since = 0.0
                 continue
+            # Only when the script itself reports it found nothing. A password
+            # held back by the one-submission guard also returns False here,
+            # and there the provider really is just still working.
+            if (
+                str(auto_login.get("code") or "") == "LOGIN_STEP_NOT_FOUND"
+                and host in _WEBBILLING_SECURITY_HOSTS
+            ):
+                stalled_since = stalled_since or time.time()
+                if time.time() - stalled_since >= _STALLED_LOGIN_SECONDS:
+                    # Whatever this page is asking - a bot check whose wording
+                    # nobody anticipated, a consent, a question - it is on the
+                    # provider's own sign-in host and it is asking somebody,
+                    # and it is not asking anything this knows how to answer.
+                    # Show it to the owner instead of spending two minutes to
+                    # tell them the login "could not be detected".
+                    raise AcquisitionError(
+                        "Webビリング/dアカウントの画面で自動で進められる操作が見つかりません。",
+                        code="SECURITY_CHALLENGE",
+                        advice=(
+                            "画面をそのまま表示します。表示されている確認や操作を"
+                            "行ってから、取得を続けてください。"
+                        ),
+                        challenge_kind=ChallengeKind.INTERACTIVE,
+                    )
+            else:
+                stalled_since = 0.0
             time.sleep(1.0)
         raise AcquisitionError(
             "Webビリングのログイン完了を検知できませんでした。",
