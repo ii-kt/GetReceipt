@@ -948,6 +948,20 @@ class WebBillingAutoFetcher:
             logs=tuple(logs),
         )
 
+    def resume_after_interactive_challenge(self, target_month: str) -> FetchedStatement:
+        """Carry on from the page the owner cleared by hand.
+
+        The d-account sign-in is fronted by a check that asks whether the
+        visitor is a person. Nothing here answers it - the owner does that on
+        the live page - and this only picks the ordinary sign-in back up in
+        the same browser, which now carries whatever the provider granted for
+        clearing it. If the check is still up, the sign-in wait says so again
+        and the page goes back to the owner rather than the run ending.
+        """
+
+        time.sleep(1.5)
+        return self.fetch_pdf(target_month)
+
     def resume_after_security_code(self, target_month: str, code: str) -> FetchedStatement:
         """Resume the exact Chrome page after Web Billing/d-account OTP."""
 
@@ -1307,6 +1321,17 @@ if (location.protocol !== "https:" || location.hostname !== "mypage.commufa.jp")
 }
 const captchaPresent = Boolean(document.querySelector("iframe[src*='recaptcha'], iframe[src*='hcaptcha'], [data-sitekey], .g-recaptcha, .h-captcha")) || ["captcha", "recaptcha", "hcaptcha", "画像認証", "ロボットではありません"].some((word) => pageText.includes(normalize(word)));
 if (captchaPresent) return { attempted: false, code: "SECURITY_CHALLENGE", challengeKind: "captcha", reason: "CAPTCHAが表示されています。" };
+// A bot check that uses none of the words above, in either language. Left
+// unrecognised it looked like a page with no login controls: the wait ran to
+// its timeout and reported LOGIN_REQUIRED while the screen was asking a
+// question only a person can answer. Nothing here answers it - naming it is
+// what lets the app hand the live page to the owner.
+// Only markers that belong to the bot check itself. "#challenge-form" and the
+// like read as a security-question form too, and mistaking the one-time-code
+// page for this would leave the owner with no box to type the code into.
+const humanCheckPresent = Boolean(document.querySelector("iframe[src*='challenges.cloudflare.com'], iframe[src*='turnstile'], .cf-turnstile, #cf-chl-widget, #cf-turnstile"))
+  || ["confirm you are human", "verify you are human", "you are not a bot", "人間であることを確認", "あなたが人間であること", "ロボットでないこと"].some((word) => pageText.includes(normalize(word)));
+if (humanCheckPresent) return { attempted: false, code: "SECURITY_CHALLENGE", challengeKind: "interactive", reason: "人間であることの確認が表示されています。" };
 const otpWords = ["ワンタイム", "確認コード", "認証コード", "セキュリティコード", "verification code", "one-time", "otp"];
 const otpInputs = [...document.querySelectorAll("input")].filter(visible).filter((input) => {
   const type = String(input.type || "text").toLowerCase();
@@ -1432,6 +1457,17 @@ const byText = (words, excludes = []) => controls()
 const pageText = normalize(document.body?.innerText || "");
 const captchaPresent = Boolean(document.querySelector("iframe[src*='recaptcha'], iframe[src*='hcaptcha'], [data-sitekey], .g-recaptcha, .h-captcha")) || ["captcha", "recaptcha", "hcaptcha", "画像認証", "ロボットではありません"].some((word) => pageText.includes(normalize(word)));
 if (captchaPresent) return { attempted: false, code: "SECURITY_CHALLENGE", challengeKind: "captcha", reason: "CAPTCHAが表示されています。" };
+// A bot check that uses none of the words above, in either language. Left
+// unrecognised it looked like a page with no login controls: the wait ran to
+// its timeout and reported LOGIN_REQUIRED while the screen was asking a
+// question only a person can answer. Nothing here answers it - naming it is
+// what lets the app hand the live page to the owner.
+// Only markers that belong to the bot check itself. "#challenge-form" and the
+// like read as a security-question form too, and mistaking the one-time-code
+// page for this would leave the owner with no box to type the code into.
+const humanCheckPresent = Boolean(document.querySelector("iframe[src*='challenges.cloudflare.com'], iframe[src*='turnstile'], .cf-turnstile, #cf-chl-widget, #cf-turnstile"))
+  || ["confirm you are human", "verify you are human", "you are not a bot", "人間であることを確認", "あなたが人間であること", "ロボットでないこと"].some((word) => pageText.includes(normalize(word)));
+if (humanCheckPresent) return { attempted: false, code: "SECURITY_CHALLENGE", challengeKind: "interactive", reason: "人間であることの確認が表示されています。" };
 const passkeyWords = ["passkey", "パスキー", "webauthn", "セキュリティキー", "生体認証"];
 if (passkeyWords.some((word) => pageText.includes(normalize(word)))) return { attempted: false, code: "SECURITY_CHALLENGE", challengeKind: "passkey_unavailable", reason: "遠隔ワーカー非対応のパスキー認証が表示されています。" };
 const securityWords = ["ワンタイム", "認証コード", "確認コード", "セキュリティコード", "本人確認"];
@@ -1740,6 +1776,17 @@ const bestControl = (keywords, excludes = [], predicate = () => true) => control
 const pageText = normalize(document.body?.innerText || "");
 const captchaPresent = Boolean(document.querySelector("iframe[src*='recaptcha'], iframe[src*='hcaptcha'], [data-sitekey], .g-recaptcha, .h-captcha")) || ["captcha", "recaptcha", "hcaptcha", "画像認証", "ロボットではありません"].some((word) => pageText.includes(normalize(word)));
 if (captchaPresent) return { attempted: false, code: "SECURITY_CHALLENGE", challengeKind: "captcha", reason: "CAPTCHAが表示されています。" };
+// A bot check that uses none of the words above, in either language. Left
+// unrecognised it looked like a page with no login controls: the wait ran to
+// its timeout and reported LOGIN_REQUIRED while the screen was asking a
+// question only a person can answer. Nothing here answers it - naming it is
+// what lets the app hand the live page to the owner.
+// Only markers that belong to the bot check itself. "#challenge-form" and the
+// like read as a security-question form too, and mistaking the one-time-code
+// page for this would leave the owner with no box to type the code into.
+const humanCheckPresent = Boolean(document.querySelector("iframe[src*='challenges.cloudflare.com'], iframe[src*='turnstile'], .cf-turnstile, #cf-chl-widget, #cf-turnstile"))
+  || ["confirm you are human", "verify you are human", "you are not a bot", "人間であることを確認", "あなたが人間であること", "ロボットでないこと"].some((word) => pageText.includes(normalize(word)));
+if (humanCheckPresent) return { attempted: false, code: "SECURITY_CHALLENGE", challengeKind: "interactive", reason: "人間であることの確認が表示されています。" };
 const passkeyWords = ["passkey", "パスキー", "webauthn", "セキュリティキー", "生体認証"];
 if (passkeyWords.some((word) => pageText.includes(normalize(word)))) return { attempted: false, code: "SECURITY_CHALLENGE", challengeKind: "passkey_unavailable", reason: "遠隔ワーカー非対応のパスキー認証が表示されています。" };
 const securityWords = ["セキュリティコード", "確認コード", "認証コード", "ワンタイム", "2段階", "二段階", "本人確認", "verification code"];

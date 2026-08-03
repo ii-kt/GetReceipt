@@ -1237,19 +1237,19 @@ def resume_security_code(
             solved_browser.set_deadline(None)
         updated = dict(challenge)
         if interactive:
-            # The gate is still up: either the piece is not in place yet or the
-            # provider issued a fresh puzzle. Keep the same browser and let the
-            # owner try again rather than starting the sign-in over.
+            # The gate is still up: not cleared yet, or the provider put up a
+            # fresh one. Keep the same browser and let the owner try again
+            # rather than starting the sign-in over.
+            gate, instruction = interactive_gate_wording(challenge)
             challenge_message = str(
                 getattr(getattr(result, "challenge", None), "message", "")
             )
             updated["error"] = (
-                challenge_message
-                or "パズルがまだ完成していません。ピースを枠に合わせてください。"
+                challenge_message or f"{gate}がまだ通っていません。{instruction}"
             )
             st.session_state[SECURITY_CHALLENGE_KEY] = updated
             st.session_state[f"{PUZZLE_OPEN_KEY}_{token}"] = True
-            status_box.update(label="パズルをもう一度確認してください。", state="error")
+            status_box.update(label=f"{gate}をもう一度確認してください。", state="error")
             st.rerun()
         minimum = int(challenge.get("min_length") or 6)
         maximum = int(challenge.get("max_length") or 6)
@@ -1623,6 +1623,20 @@ def interactive_challenge_fingerprint(challenge: dict[str, Any]) -> str:
         return ""
 
 
+def interactive_gate_wording(challenge: dict[str, Any]) -> tuple[str, str]:
+    """What to call this gate, and what the owner has to do with it.
+
+    Two different things arrive here. Epos guards its sign-in with a slide
+    puzzle; the d-account sign-in is fronted by a check asking whether the
+    visitor is a person. Calling the second one a puzzle told the owner to
+    drag a piece that is not on the screen.
+    """
+
+    if str(challenge.get("kind") or "") == "interactive":
+        return ("確認チェック", "画面の指示どおりにチェックしてください。")
+    return ("パズル", "ピースを枠に合わせてください。")
+
+
 def render_interactive_challenge(
     storage: DriveStorage,
     batch: dict[str, Any],
@@ -1631,20 +1645,22 @@ def render_interactive_challenge(
 ) -> None:
     """Mirror the provider's page so the owner can clear its gate by hand.
 
-    Epos guards its sign-in with a slide puzzle, which no code can express and
-    which the app must not answer for the owner. Holding the same Chrome open
-    and showing it here keeps every other step automatic: once the owner has
-    worked the control, the acquisition carries on from that very page.
+    Epos guards its sign-in with a slide puzzle and the d-account sign-in with
+    a check that asks whether the visitor is a person. Neither is something
+    code may answer for the owner. Holding the same Chrome open and showing it
+    here keeps every other step automatic: once the owner has worked the
+    control, the acquisition carries on from that very page.
     """
 
+    gate, instruction = interactive_gate_wording(challenge)
     opened_key = f"{PUZZLE_OPEN_KEY}_{token}"
     if not st.session_state.get(opened_key):
         st.caption(
-            "パズルを開いて、ピースを枠に合わせてください。"
-            "合わせ終わったら「🧩 解除して自動取得を続ける」を押します。"
+            f"{gate}を開いて、{instruction}"
+            f"終わったら「🧩 解除して自動取得を続ける」を押します。"
         )
         if st.button(
-            "🧩 パズルを開く",
+            f"🧩 {gate}を開く",
             type="primary",
             use_container_width=True,
         ):

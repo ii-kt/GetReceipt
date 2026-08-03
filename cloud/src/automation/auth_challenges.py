@@ -156,6 +156,15 @@ _CAPTCHA_MARKERS = (
     "hcaptcha",
     "私はロボットではありません",
     "ロボットではない",
+    # The bot check in front of the d-account sign-in words itself in English
+    # and never says "captcha". Recognising it is what lets the owner answer
+    # it on the live page instead of the run failing as a login timeout.
+    "confirm you are human",
+    "verify you are human",
+    "you are not a bot",
+    "人間であることを確認",
+    "あなたが人間であること",
+    "ロボットでないこと",
 )
 _PASSKEY_MARKERS = (
     "passkey",
