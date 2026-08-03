@@ -187,11 +187,19 @@ def _login_timeout_advice(
     return " / ".join(parts)
 
 
-def _passed_security_code_gate(summary: dict[str, Any]) -> bool:
+def _inside_commufa_members_area(summary: dict[str, Any]) -> bool:
     """True once the verification step and the password form are both gone.
 
-    The caller has already established that no security challenge is showing,
-    so the remaining question is whether the login form is still up.
+    Myコミュファ is a Salesforce Experience site whose signed-in landing page
+    carries none of the words the configured hints look for: it greets the
+    member by name and shows "2026年6月のご利用料金" rather than 請求額 or
+    ご契約内容. Once the browser profile is remembered the acquisition arrives
+    straight there, so judging by wording alone decided the owner was not
+    signed in while they plainly were, and the wait ran to its timeout.
+
+    What is dependable is the shape of the site: an unauthenticated visitor is
+    sent to the login path, so being anywhere else on this host, with no
+    password field and no verification prompt, means the gate is behind us.
     """
 
     from urllib.parse import urlsplit
@@ -199,7 +207,7 @@ def _passed_security_code_gate(summary: dict[str, Any]) -> bool:
     if int(summary.get("passwordFields") or 0) > 0:
         return False
     parsed = urlsplit(str(summary.get("url") or ""))
-    if parsed.hostname != "mypage.commufa.jp":
+    if parsed.scheme != "https" or parsed.hostname != "mypage.commufa.jp":
         return False
     path = (parsed.path or "").lower()
     # The verification step lives under its own identity path and carries no
@@ -217,8 +225,17 @@ def _passed_security_code_gate(summary: dict[str, Any]) -> bool:
             "id を検証",
             "確認コード入力",
             "コードを再送信",
+            # A signed-out page that still renders on a non-login path would
+            # be asking to sign in; the members' area never does.
+            "ログインしてください",
+            "ログインしてご利用ください",
         )
     )
+
+
+# Kept under its original name for the security-code path, which asks the same
+# question at a different moment.
+_passed_security_code_gate = _inside_commufa_members_area
 
 
 def _is_commufa_host(url: Any) -> bool:
@@ -539,6 +556,19 @@ class CommufaAutoFetcher:
             state = classify_configured_login_state(summary, self.config)
             last_state = state
             if state == "logged-in":
+                return
+            # The remembered browser profile lands straight on the members'
+            # landing page, which carries none of the configured wording. The
+            # billing navigation can drive from anywhere inside the members'
+            # area and says precisely where it got stuck, so reaching it is
+            # what matters - not whether this particular page says 請求額.
+            #
+            # Judged on the shape of the site, not on wording: a menu entry
+            # worded "ログイン情報の変更" would otherwise be enough to bring the
+            # hang straight back. The password field and the login path are
+            # what actually say the gate is still up.
+            if _inside_commufa_members_area(summary):
+                last_state = "logged-in"
                 return
             # A Salesforce Experience site redirects an unauthenticated visitor
             # to its login page. Do not run the credential script until the page

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+import time
 import unittest
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -706,8 +707,62 @@ class StreamlitAppTest(unittest.TestCase):
         self.assertGreater(commufa_signins, 0)
         self.assertLessEqual(commufa_signins, 2)
         markdown = chr(10).join(item.value for item in app.markdown)
-        self.assertIn("中止しました", markdown)
+        self.assertIn("SIGNIN_ATTEMPT_LIMIT", markdown)
+        # The pause has to say how long it lasts. Told only to "wait a while"
+        # the owner had no way to know that waiting did nothing at all.
+        self.assertRegex(markdown, r"あと約\d+分")
         self.assertEqual([], list(app.exception))
+
+    def test_the_sign_in_pause_lets_go_by_itself(self) -> None:
+        """The cap used to be counted for good.
+
+        Its own advice said to wait and run it again, but nothing ever reset
+        it, so the month stayed refused for as long as the tab stayed open.
+        """
+
+        storage = FakeDriveStorage([])
+        attempts: list[str] = []
+
+        def acquire(**kwargs):
+            attempts.append(kwargs["service_id"])
+            return SimpleNamespace(
+                success=False,
+                action_required=False,
+                file_name="",
+                failure=SimpleNamespace(
+                    code="LOGIN_TIMEOUT", message="ログインできませんでした。", detail=""
+                ),
+            )
+
+        app = self.app()
+        with (
+            patch.object(DriveStorage, "from_secrets", return_value=storage),
+            patch("src.automation.browser_session.ManagedBrowser"),
+            patch("src.automation.providers.build_receipt_fetcher", return_value=object()),
+            patch("src.workflows.auto_acquisition.run_auto_acquisition", side_effect=acquire),
+        ):
+            app.run(timeout=20)
+            for _ in range(3):
+                buttons = [b for b in app.button if "自動取得" in b.label]
+                if not buttons:
+                    break
+                buttons[0].click().run(timeout=60)
+            capped = attempts.count("commufa")
+            self.assertGreater(capped, 0)
+
+            # Age the recorded sign-ins, which is all that waiting does.
+            recorded = app.session_state["getreceipt_signin_attempts"]
+            self.assertTrue(recorded, "サインイン記録が残っていない")
+            long_ago = time.monotonic() - 24 * 60 * 60
+            app.session_state["getreceipt_signin_attempts"] = {
+                key: [long_ago for _ in stamps] for key, stamps in recorded.items()
+            }
+
+            buttons = [b for b in app.button if "自動取得" in b.label]
+            self.assertTrue(buttons, "再取得のボタンが出ていない")
+            buttons[0].click().run(timeout=60)
+
+        self.assertGreater(attempts.count("commufa"), capped)
 
     def test_a_status_survives_reopening_the_app(self) -> None:
         """Session state is gone on reload, so the reason has to outlive it.
@@ -744,6 +799,102 @@ class StreamlitAppTest(unittest.TestCase):
         commufa = next(c for c in cards if "中部テレコミュニケーション" in c)
         self.assertIn("gr-card--not_issued", commufa)
         self.assertIn("まだ掲載されていません", commufa)
+
+    def test_todays_unissued_answer_is_not_bought_a_second_time(self) -> None:
+        """A bill is issued once a month, so today's answer still stands.
+
+        Signing in again to be told the same thing costs another verification
+        code on the owner's phone - and for a month that cannot exist yet,
+        that code buys nothing at all.
+        """
+
+        storage = FakeDriveStorage([])
+        attempts: list[str] = []
+        answered_today = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        remembered = {
+            "2026-07": {
+                "mobile": {
+                    "code": "WEBBILLING_MONTH_NOT_ISSUED",
+                    "message": "Webビリングに2026年7月分の証明書がまだ発行されていません。",
+                    "detail": "発行済みの最新は2026年6月分です。",
+                    "at": answered_today,
+                }
+            }
+        }
+
+        def acquire(**kwargs):
+            attempts.append(kwargs["service_id"])
+            return SimpleNamespace(
+                success=False,
+                action_required=False,
+                file_name="",
+                failure=SimpleNamespace(
+                    code="LOGIN_TIMEOUT", message="ログインできませんでした。", detail=""
+                ),
+            )
+
+        app = self.app()
+        with (
+            patch.object(DriveStorage, "from_secrets", return_value=storage),
+            patch("src.automation.browser_session.ManagedBrowser"),
+            patch("src.automation.providers.build_receipt_fetcher", return_value=object()),
+            patch("src.workflows.auto_acquisition.run_auto_acquisition", side_effect=acquire),
+            patch("src.storage.status_store.ServiceStatusStore.load", return_value=remembered),
+        ):
+            app.run(timeout=20)
+            next(b for b in app.button if "自動取得" in b.label).click().run(timeout=60)
+
+        self.assertNotIn("mobile", attempts)
+        # The other services are untouched by this: only the one the provider
+        # has already answered is skipped.
+        self.assertIn("commufa", attempts)
+        cards = [str(item.value) for item in app.markdown if "gr-card" in str(item.value)]
+        mobile = next(c for c in cards if "NTTファイナンス" in c)
+        self.assertIn("gr-card--not_issued", mobile)
+        self.assertIn("まだ発行されていません", mobile)
+
+    def test_yesterdays_unissued_answer_is_asked_again(self) -> None:
+        """The saving is only good for the day; tomorrow it is worth asking."""
+
+        storage = FakeDriveStorage([])
+        attempts: list[str] = []
+        answered_before = (
+            datetime.now(timezone.utc) - timedelta(days=2)
+        ).isoformat(timespec="seconds")
+        remembered = {
+            "2026-07": {
+                "mobile": {
+                    "code": "WEBBILLING_MONTH_NOT_ISSUED",
+                    "message": "まだ発行されていません。",
+                    "detail": "",
+                    "at": answered_before,
+                }
+            }
+        }
+
+        def acquire(**kwargs):
+            attempts.append(kwargs["service_id"])
+            return SimpleNamespace(
+                success=False,
+                action_required=False,
+                file_name="",
+                failure=SimpleNamespace(
+                    code="LOGIN_TIMEOUT", message="ログインできませんでした。", detail=""
+                ),
+            )
+
+        app = self.app()
+        with (
+            patch.object(DriveStorage, "from_secrets", return_value=storage),
+            patch("src.automation.browser_session.ManagedBrowser"),
+            patch("src.automation.providers.build_receipt_fetcher", return_value=object()),
+            patch("src.workflows.auto_acquisition.run_auto_acquisition", side_effect=acquire),
+            patch("src.storage.status_store.ServiceStatusStore.load", return_value=remembered),
+        ):
+            app.run(timeout=20)
+            next(b for b in app.button if "自動取得" in b.label).click().run(timeout=60)
+
+        self.assertIn("mobile", attempts)
 
     def test_a_saved_month_forgets_its_remembered_reason(self) -> None:
         storage = FakeDriveStorage([])

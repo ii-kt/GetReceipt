@@ -110,6 +110,10 @@ MAIL_CODE_RESERVE_SECONDS = 60
 # code. Two is enough to survive one bad attempt; beyond that the owner is
 # just being spammed, and repeated sign-ins are what risks an account lock.
 MAX_SIGNIN_ATTEMPTS = 2
+# ...but the cap has to let go on its own. Counted for good, it turned one bad
+# afternoon into a month that could never be retried, while telling the owner
+# to wait - which did nothing at all.
+SIGNIN_COOL_OFF_SECONDS = 15 * 60
 # Google lists only a handful of reasons a refresh token stops working, and
 # the app cannot tell which one applied. Naming the one that is actionable -
 # reissuing - beats sending the owner to change a setting that may already be
@@ -944,20 +948,41 @@ def execute_next_service(storage: DriveStorage, batch: dict[str, Any]) -> None:
                 )
                 return
 
+    # The provider may already have answered this today, and a bill is issued
+    # once a month: nothing it said this morning can have changed by tonight.
+    # Signing in to be told the same thing again costs another verification
+    # code, and for a month that cannot exist yet that code buys nothing.
+    settled = settled_unissued_outcome(service_id, target_month)
+    if settled is not None:
+        batch_complete = fail_batch_service(
+            batch,
+            service_id,
+            code=str(settled.get("code") or ""),
+            message=str(settled.get("message") or ""),
+            detail=str(settled.get("detail") or ""),
+        )
+        status_box.update(
+            label=f"{service.label}はこの月の請求がまだ発行されていません。",
+            state="complete",
+        )
+        st.rerun()
+
     # Signing in again means another verification code to the owner's phone or
     # mailbox. Stop before sending a third one and say so, rather than looking
     # like the app is stuck in a loop.
     if signin_attempts(service_id, target_month) >= MAX_SIGNIN_ATTEMPTS:
+        minutes_left = signin_cool_off_remaining(service_id, target_month)
         batch_complete = fail_batch_service(
             batch,
             service_id,
             code="SIGNIN_ATTEMPT_LIMIT",
             message=(
-                f"{service.label}のログインを{MAX_SIGNIN_ATTEMPTS}回試したので中止しました。"
+                f"{service.label}のログインを{MAX_SIGNIN_ATTEMPTS}回試したため、"
+                f"あと約{minutes_left}分お休みします。"
             ),
             detail=(
                 "これ以上続けると確認コードが何度も届き、アカウントのロックにも"
-                "つながります。しばらく置いてから、もう一度実行してください。"
+                f"つながります。約{minutes_left}分後にもう一度実行すれば再開します。"
             ),
         )
         status_box.update(
@@ -1359,25 +1384,87 @@ def forget_month_outcome(*, target_month: str, service_id: str) -> None:
     st.session_state.pop(STORED_OUTCOMES_KEY, None)
 
 
+def settled_unissued_outcome(
+    service_id: str, target_month: str
+) -> dict[str, str] | None:
+    """The provider's own "not billed yet" answer, if it gave one today.
+
+    A statement is issued once a month on the provider's own schedule, so an
+    answer from earlier the same day cannot have changed. Returning it saves a
+    sign-in - and with it a verification code to the owner's phone - for a
+    month that is simply not there yet. It is deliberately only good for the
+    calendar day: tomorrow the question is worth asking again.
+    """
+
+    entry = stored_month_outcomes(target_month).get(service_id)
+    if not isinstance(entry, dict):
+        return None
+    if str(entry.get("code") or "") not in NOT_ISSUED_CODES:
+        return None
+    try:
+        answered_at = datetime.fromisoformat(str(entry.get("at") or ""))
+    except ValueError:
+        return None
+    if answered_at.tzinfo is None:
+        answered_at = answered_at.replace(tzinfo=timezone.utc)
+    if answered_at.astimezone(TOKYO).date() != datetime.now(TOKYO).date():
+        return None
+    return dict(entry)
+
+
+def _recent_signin_times(service_id: str, target_month: str) -> list[float]:
+    """The sign-ins for this service-month still inside the cool-off window.
+
+    The cap used to be a plain count that nothing ever reset, so the advice it
+    printed - wait a while and run it again - was untrue: waiting changed
+    nothing, and the month stayed refused for as long as the tab stayed open.
+    Counting only recent sign-ins makes the wait do what it says.
+    """
+
+    recorded = st.session_state.get(SIGNIN_ATTEMPTS_KEY, {})
+    if not isinstance(recorded, dict):
+        return []
+    stamps = recorded.get(f"{service_id}:{target_month}")
+    if not isinstance(stamps, (list, tuple)):
+        return []
+    cutoff = time.monotonic() - SIGNIN_COOL_OFF_SECONDS
+    return sorted(
+        float(stamp)
+        for stamp in stamps
+        if isinstance(stamp, (int, float)) and float(stamp) > cutoff
+    )
+
+
 def signin_attempts(service_id: str, target_month: str) -> int:
-    counts = st.session_state.get(SIGNIN_ATTEMPTS_KEY, {})
-    return int(counts.get(f"{service_id}:{target_month}", 0)) if isinstance(counts, dict) else 0
+    return len(_recent_signin_times(service_id, target_month))
+
+
+def signin_cool_off_remaining(service_id: str, target_month: str) -> int:
+    """Whole minutes until this service may sign in again, at least one."""
+
+    stamps = _recent_signin_times(service_id, target_month)
+    if not stamps:
+        return 0
+    seconds = SIGNIN_COOL_OFF_SECONDS - (time.monotonic() - stamps[0])
+    return max(1, int(seconds // 60) + (1 if seconds % 60 else 0))
 
 
 def record_signin_attempt(service_id: str, target_month: str) -> int:
     """Count one browser sign-in, which is one verification code to the owner."""
 
-    counts = dict(st.session_state.get(SIGNIN_ATTEMPTS_KEY, {}) or {})
+    recorded = dict(st.session_state.get(SIGNIN_ATTEMPTS_KEY, {}) or {})
     key = f"{service_id}:{target_month}"
-    counts[key] = int(counts.get(key, 0)) + 1
-    st.session_state[SIGNIN_ATTEMPTS_KEY] = counts
-    return counts[key]
+    stamps = _recent_signin_times(service_id, target_month)
+    stamps.append(time.monotonic())
+    recorded[key] = stamps
+    st.session_state[SIGNIN_ATTEMPTS_KEY] = recorded
+    return len(stamps)
 
 
 def clear_signin_attempts(service_id: str, target_month: str) -> None:
-    counts = dict(st.session_state.get(SIGNIN_ATTEMPTS_KEY, {}) or {})
-    counts.pop(f"{service_id}:{target_month}", None)
-    st.session_state[SIGNIN_ATTEMPTS_KEY] = counts
+    recorded = dict(st.session_state.get(SIGNIN_ATTEMPTS_KEY, {}) or {})
+    recorded.pop(f"{service_id}:{target_month}", None)
+    st.session_state[SIGNIN_ATTEMPTS_KEY] = recorded
 
 
 def offer_expired_challenge_restart(
