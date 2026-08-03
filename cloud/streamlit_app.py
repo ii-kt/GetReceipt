@@ -1685,6 +1685,15 @@ def render_interactive_challenge(
             st.rerun()
         return
 
+    view_key = f"live_view_{token}"
+    # Which gesture the viewer offers first. A puzzle needs a drag; a bot check
+    # needs a button pressed, and asking for that in the language of pieces and
+    # destinations described nothing that was on the screen. Handed over in
+    # session state rather than as an argument, so a deploy that serves the
+    # previous viewer alongside this page still works.
+    st.session_state[f"{view_key}__gesture"] = (
+        "drag" if str(challenge.get("kind") or "") == "captcha" else "tap"
+    )
     try:
         with challenge_runtime.browser_lease_registry.checkout(
             token,
@@ -1694,7 +1703,7 @@ def render_interactive_challenge(
             live_view.render_live_view(
                 st,
                 lease.browser,
-                key=f"live_view_{token}",
+                key=view_key,
                 allowed_hosts=tuple(challenge.get("allowed_hosts") or ()),
             )
     except challenge_runtime.BrowserLeaseUnavailableError:

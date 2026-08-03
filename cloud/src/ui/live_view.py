@@ -56,7 +56,11 @@ def render_live_view(
 
     A slide puzzle needs a drag, which one tap cannot express, so the owner
     marks the piece and then its destination and the two points are replayed
-    as a single continuous movement.
+    as a single continuous movement. A bot check needs a button pressed, and
+    there one tap is the whole gesture. Which one is offered first comes from
+    ``st.session_state[f"{key}__gesture"]``, and the owner can switch: passing
+    it as an argument would break the moment a deploy served this module and
+    the previous page together.
     """
 
     try:
@@ -90,19 +94,37 @@ def render_live_view(
     display_width = min(_MAX_DISPLAY_WIDTH, natural_width)
     pending_key = f"{key}__drag_start"
     processed_key = f"{key}__last_tap"
-    pending = st.session_state.get(pending_key)
+
+    # What the gate actually needs. A slide puzzle needs a drag, which one tap
+    # cannot express; a bot check needs a button pressed, and asking for that
+    # in the language of pieces and destinations described nothing that was on
+    # the screen. The caller says which; anything older gets what it had.
+    drag_default = st.session_state.get(f"{key}__gesture", "drag") == "drag"
+    drag_mode = st.checkbox(
+        "ドラッグで操作する（パズルなど）",
+        value=drag_default,
+        key=f"{key}__drag_mode",
+        help="オフのときは、タップした場所をそのままクリックします。",
+    )
+    pending = st.session_state.get(pending_key) if drag_mode else None
+    if not drag_mode:
+        st.session_state.pop(pending_key, None)
 
     if pending:
         st.info(
-            "ピースの移動先をタップしてください。もう一度最初からやり直す場合は"
-            "「選択をやり直す」を押してください。",
+            "移動先をタップしてください。やり直す場合は「選択をやり直す」を"
+            "押してください。",
             icon=":material/drag_pan:",
+        )
+    elif drag_mode:
+        st.caption(
+            "動かしたいものをタップし、次に移動先をタップすると、"
+            "同じChromeへドラッグ操作を送ります。"
         )
     else:
         st.caption(
-            "動かしたいピースをタップし、次に移動先をタップすると、"
-            "同じChromeへドラッグ操作を送ります。ボタンを押すだけの場合は"
-            "そのボタンを2回タップしてください。"
+            "押したいボタンやチェックをタップしてください。"
+            "同じChromeへその場所のクリックを送ります。"
         )
 
     tapped = streamlit_image_coordinates(
@@ -122,19 +144,20 @@ def render_live_view(
                 natural_width=natural_width,
                 natural_height=natural_height,
             )
-            if pending:
+            start = pending if pending else point
+            if drag_mode and not pending:
+                st.session_state[pending_key] = point
+            else:
                 st.session_state.pop(pending_key, None)
                 try:
                     browser.drag_current_page(
-                        int(pending[0]), int(pending[1]), point[0], point[1]
+                        int(start[0]), int(start[1]), point[0], point[1]
                     )
                 except Exception as error:
                     st.error(
                         f"操作を送信できませんでした。[{type(error).__name__}]",
                         icon=":material/error:",
                     )
-            else:
-                st.session_state[pending_key] = point
             st.rerun()
 
     columns = st.columns(2)
