@@ -1133,10 +1133,20 @@ const labelOf = (el) => {
     .join(" ");
   return [el.innerText, el.textContent, el.value, el.alt, el.title, el.getAttribute && el.getAttribute("aria-label"), el.getAttribute && el.getAttribute("name"), el.getAttribute && el.getAttribute("id"), el.href, imageText].filter(Boolean).join(" ");
 };
+// Stops at the page-level containers. Climbing into body or main makes the
+// "context" the entire document, so the ログアウト in the site header and a
+// streaming advert at the foot of the page counted as surroundings of every
+// control on it - and cancelled out the very links this looks for. Kept
+// bounded rather than dropped, because a bare 詳しくはこちら really does need
+// the advert card around it to be recognised as an advert.
+const PAGE_LEVEL = new Set(["BODY", "MAIN", "HTML", "HEADER", "FOOTER", "NAV"]);
 const contextOf = (el, maxDepth = 5) => {
   const values = [];
   let cursor = el;
-  for (let depth = 0; cursor && depth < maxDepth; depth += 1, cursor = cursor.parentElement) values.push(labelOf(cursor));
+  for (let depth = 0; cursor && depth < maxDepth; depth += 1, cursor = cursor.parentElement) {
+    if (depth > 0 && PAGE_LEVEL.has(cursor.tagName)) break;
+    values.push(labelOf(cursor));
+  }
   return values.join(" ");
 };
 const pointOf = (el) => {
@@ -1257,10 +1267,17 @@ const visible = (el) => {
   return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
 };
 const labelOf = (el) => [el.innerText, el.textContent, el.value, el.placeholder, el.title, el.alt, el.getAttribute && el.getAttribute("aria-label"), el.getAttribute && el.getAttribute("name"), el.getAttribute && el.getAttribute("id")].filter(Boolean).join(" ");
+// Stops at the page-level containers: climbing into body or main makes the
+// surroundings the whole document, so every control looks like it sits next
+// to every word on the page.
+const PAGE_LEVEL = new Set(["BODY", "MAIN", "HTML", "HEADER", "FOOTER", "NAV"]);
 const contextOf = (el, depth = 4) => {
   const values = [];
   let cursor = el;
-  for (let i = 0; cursor && i < depth; i += 1, cursor = cursor.parentElement) values.push(labelOf(cursor));
+  for (let i = 0; cursor && i < depth; i += 1, cursor = cursor.parentElement) {
+    if (i > 0 && PAGE_LEVEL.has(cursor.tagName)) break;
+    values.push(labelOf(cursor));
+  }
   return values.join(" ");
 };
 const pointOf = (el) => {
@@ -1531,10 +1548,17 @@ const attachmentPreviewPointOf = (el) => {
   const rect = el.getBoundingClientRect();
   return { x: Math.round(rect.left + Math.min(Math.max(rect.width * 0.32, 44), Math.max(rect.width - 8, 44))), y: Math.round(rect.top + rect.height / 2) };
 };
+// Stops at the page-level containers: climbing into body or main makes the
+// surroundings the whole document, so every control looks like it sits next
+// to every word on the page.
+const PAGE_LEVEL = new Set(["BODY", "MAIN", "HTML", "HEADER", "FOOTER", "NAV"]);
 const contextOf = (el, maxDepth = 5) => {
   const values = [];
   let cursor = el;
-  for (let depth = 0; cursor && depth < maxDepth; depth += 1, cursor = cursor.parentElement) values.push(labelOf(cursor));
+  for (let depth = 0; cursor && depth < maxDepth; depth += 1, cursor = cursor.parentElement) {
+    if (depth > 0 && PAGE_LEVEL.has(cursor.tagName)) break;
+    values.push(labelOf(cursor));
+  }
   return values.join(" ");
 };
 const hasTargetMonth = (text) => {
@@ -1673,10 +1697,17 @@ const visible = (el) => {
   return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
 };
 const labelOf = (el) => [el.innerText, el.textContent, el.value, el.alt, el.title, el.placeholder, el.getAttribute && el.getAttribute("aria-label"), el.getAttribute && el.getAttribute("name"), el.getAttribute && el.getAttribute("id")].filter(Boolean).join(" ");
+// Stops at the page-level containers: climbing into body or main makes the
+// surroundings the whole document, so every control looks like it sits next
+// to every word on the page.
+const PAGE_LEVEL = new Set(["BODY", "MAIN", "HTML", "HEADER", "FOOTER", "NAV"]);
 const contextOf = (el, depth = 3) => {
   const parts = [];
   let node = el;
-  for (let i = 0; node && i < depth; i += 1, node = node.parentElement) parts.push(labelOf(node));
+  for (let i = 0; node && i < depth; i += 1, node = node.parentElement) {
+    if (i > 0 && PAGE_LEVEL.has(node.tagName)) break;
+    parts.push(labelOf(node));
+  }
   return parts.join(" ");
 };
 const controls = () => [...document.querySelectorAll("button, input, a, [role='button'], [onclick], [tabindex]")].filter(visible);
@@ -1830,10 +1861,17 @@ const pointOf = (el) => {
   const rect = el.getBoundingClientRect();
   return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
 };
+// Eight levels reaches body on almost any page, which made the surroundings
+// the whole document: every checkbox then looked like the 同意 one, and every
+// control scored for words that were nowhere near it.
+const PAGE_LEVEL = new Set(["BODY", "MAIN", "HTML", "HEADER", "FOOTER", "NAV"]);
 const contextOf = (el, maxDepth = 8) => {
   const values = [];
   let cursor = el;
-  for (let depth = 0; cursor && depth < maxDepth; depth += 1, cursor = cursor.parentElement) values.push(labelOf(cursor));
+  for (let depth = 0; cursor && depth < maxDepth; depth += 1, cursor = cursor.parentElement) {
+    if (depth > 0 && PAGE_LEVEL.has(cursor.tagName)) break;
+    values.push(labelOf(cursor));
+  }
   return values.join(" ");
 };
 const controls = () => [...document.querySelectorAll("a, button, input[type='button'], input[type='submit'], input[type='image'], [role='button'], [onclick], [tabindex]")].filter(visible);

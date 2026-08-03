@@ -109,10 +109,17 @@ const visible = (el) => {
   return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
 };
 const labelOf = (el) => [el.innerText, el.textContent, el.value, el.placeholder, el.title, el.alt, el.getAttribute && el.getAttribute("aria-label"), el.getAttribute && el.getAttribute("name"), el.getAttribute && el.getAttribute("id")].filter(Boolean).join(" ");
+// Stops at the page-level containers: climbing into body or main makes the
+// surroundings the whole document, so every control looks like it sits next
+// to every word on the page.
+const PAGE_LEVEL = new Set(["BODY", "MAIN", "HTML", "HEADER", "FOOTER", "NAV"]);
 const contextOf = (el, depth = 4) => {
   const values = [];
   let cursor = el;
-  for (let i = 0; cursor && i < depth; i += 1, cursor = cursor.parentElement) values.push(labelOf(cursor));
+  for (let i = 0; cursor && i < depth; i += 1, cursor = cursor.parentElement) {
+    if (i > 0 && PAGE_LEVEL.has(cursor.tagName)) break;
+    values.push(labelOf(cursor));
+  }
   return values.join(" ");
 };
 const pointOf = (el) => {
