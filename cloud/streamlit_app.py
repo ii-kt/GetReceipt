@@ -1602,12 +1602,72 @@ def render_security_code_form(
             st.rerun()
         resume_security_code(storage, batch, challenge, normalized_code)
 
+    render_code_page_inspector(challenge, token)
+
     if st.button(
-        "新しい確認コードを発行",
+        "新しい確認コードを発行（最初からやり直します）",
         use_container_width=True,
         icon=":material/refresh:",
     ):
         restart_security_challenge(batch, challenge)
+
+
+def render_code_page_inspector(challenge: dict[str, Any], token: str) -> None:
+    """Let the owner see the page the code was supposed to come from.
+
+    A code box on its own assumes the provider has already sent the code. It
+    may not have: the page can be offering a 送信 button, asking which
+    destination to use, or showing why it refused. None of that was visible,
+    so a code that never arrived left only one way out - restarting the whole
+    sign-in, and with it the bot check.
+
+    Nothing is pressed here. It shows the live page and passes on the owner's
+    taps, exactly as the puzzle viewer does.
+    """
+
+    opened_key = f"{PUZZLE_OPEN_KEY}_code_{token}"
+    if not st.session_state.get(opened_key):
+        if st.button(
+            "コードが届かないときは画面を確認する",
+            use_container_width=True,
+            icon=":material/visibility:",
+        ):
+            st.session_state[opened_key] = True
+            st.rerun()
+        return
+
+    st.caption(
+        "請求元の画面です。「送信」「再送信」など表示されている操作をタップしてから、"
+        "届いたコードを上の欄に入力してください。"
+    )
+    view_key = f"live_view_code_{token}"
+    st.session_state[f"{view_key}__gesture"] = "tap"
+    try:
+        with challenge_runtime.browser_lease_registry.checkout(
+            token,
+            expected_service_id=str(challenge.get("service_id") or ""),
+            expected_target_month=str(challenge.get("target_month") or ""),
+        ) as lease:
+            live_view.render_live_view(
+                st,
+                lease.browser,
+                key=view_key,
+                allowed_hosts=tuple(challenge.get("allowed_hosts") or ()),
+            )
+    except challenge_runtime.BrowserLeaseUnavailableError:
+        st.session_state.pop(opened_key, None)
+        st.warning(
+            "待機時間が切れました。もう一度実行してください。",
+            icon=":material/timer_off:",
+        )
+    if st.button(
+        "画面を閉じる",
+        use_container_width=True,
+        icon=":material/visibility_off:",
+        key=f"{opened_key}__close",
+    ):
+        st.session_state.pop(opened_key, None)
+        st.rerun()
 
 
 def interactive_challenge_fingerprint(challenge: dict[str, Any]) -> str:

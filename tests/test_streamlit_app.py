@@ -452,6 +452,87 @@ class StreamlitAppTest(unittest.TestCase):
         self.assertNotIn("123456", str(app.session_state))
         self.assertNotIn("654321", str(app.session_state))
 
+    def test_a_code_that_never_arrives_can_be_chased_on_the_page(self) -> None:
+        """A code box alone assumes the provider already sent one.
+
+        It may not have: the page can be offering a 送信 button, asking which
+        destination to use, or saying why it refused. None of that was
+        visible, so a code that never arrived left one way out - restarting
+        the whole sign-in, and with it the bot check.
+        """
+
+        # Everything but 携帯 already saved, so the run reaches d-account.
+        files = [
+            receipt_file("20260605", "株式会社エポスカード", 87560),
+            receipt_file("20260812", "中部テレコミュニケーション株式会社", 10002),
+            receipt_file("20260812", "フラットエナジー株式会社", 10003),
+        ]
+        storage = FakeDriveStorage(files)
+        registry = FakeBrowserLeaseRegistry()
+        browser = MagicMock()
+        browser.current_page_target.return_value = {
+            "url": "https://cfg.smt.docomo.ne.jp/auth/cgi/anidlogin"
+        }
+
+        class ResumableFetcher:
+            def resume_after_security_code(self, target_month, code):
+                return object()
+
+        def acquire(**kwargs):
+            return SimpleNamespace(
+                success=False,
+                action_required=True,
+                challenge=SimpleNamespace(
+                    kind="verification_code",
+                    message="セキュリティコードの入力が必要です。",
+                ),
+                failure=None,
+            )
+
+        app = self.app()
+        with (
+            patch.object(DriveStorage, "from_secrets", return_value=storage),
+            patch("src.automation.browser_session.ManagedBrowser", return_value=browser),
+            patch(
+                "src.automation.providers.build_receipt_fetcher",
+                return_value=ResumableFetcher(),
+            ),
+            patch("src.workflows.auto_acquisition.run_auto_acquisition", side_effect=acquire),
+            patch("src.automation.security_challenge.browser_lease_registry", registry),
+            patch("src.ui.live_view.render_live_view") as live_view_render,
+            patch("src.storage.status_store.ServiceStatusStore.load", return_value={}),
+        ):
+            app.run(timeout=20)
+            next(b for b in app.button if "自動取得" in b.label).click().run(timeout=20)
+
+            # The code box is offered, and the page is not mirrored uninvited.
+            self.assertEqual(
+                ["メールまたはSMSに届いた確認コード"],
+                [item.label for item in app.text_input],
+            )
+            live_view_render.assert_not_called()
+
+            inspect = next(
+                b for b in app.button if "画面を確認する" in b.label
+            )
+            inspect.click().run(timeout=20)
+
+            live_view_render.assert_called()
+            self.assertEqual(
+                ("webbilling.ntt-finance.co.jp", "id.smt.docomo.ne.jp", "cfg.smt.docomo.ne.jp"),
+                live_view_render.call_args.kwargs["allowed_hosts"],
+            )
+            # Pressing a 送信 button is a tap, not a drag.
+            view_key = live_view_render.call_args.kwargs["key"]
+            self.assertEqual("tap", app.session_state[f"{view_key}__gesture"])
+            # And the code box is still there to type into.
+            self.assertEqual(1, len(app.text_input))
+            # Looking at the page must not have cost the sign-in.
+            self.assertEqual([], registry.discard_calls)
+            browser.close.assert_not_called()
+
+        self.assertEqual([], list(app.exception))
+
     def test_remote_worker_challenge_recovers_from_api_and_does_not_retain_code(self) -> None:
         files = [
             receipt_file("20260605", "株式会社エポスカード", 10001),
