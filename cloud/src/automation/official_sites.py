@@ -1762,10 +1762,19 @@ def build_webbilling_auto_login_expression(credentials: dict[str, str]) -> str:
             # button on the same page. Which one is correct depends on which
             # identity the owner registered, so carry that decision here
             # rather than guessing from the page.
-            "prefersDAccount": bool(
-                credentials.get("dAccountId")
-                or credentials.get("d_account_id")
-                or "@" in str(credentials.get("login_id") or credentials.get("id") or "")
+            #
+            # A Web billing ID, when one is configured, always means the
+            # portal's own form: it is the only route that does not go out to
+            # docomo, where a bot check has to be answered by hand.
+            "prefersDAccount": (
+                False
+                if credentials.get("webbilling_id")
+                else bool(
+                    credentials.get("dAccountId")
+                    or credentials.get("d_account_id")
+                    or "@"
+                    in str(credentials.get("login_id") or credentials.get("id") or "")
+                )
             ),
         },
         r"""
