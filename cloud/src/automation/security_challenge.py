@@ -373,6 +373,46 @@ class BrowserLeaseRegistry:
         lease = self._active_lease(token)
         return lease.metadata()
 
+    def extend(self, token: str) -> BrowserLeaseMetadata:
+        """Give the owner the full hold again, because they are still working.
+
+        The hold exists so an abandoned sign-in cannot keep the single slot
+        forever. Somebody answering an image check round by round is not
+        abandoning anything, but each round costs a tap and a redraw, and the
+        clock ran the whole time - so the browser could be taken away mid-check
+        and every round already answered thrown out with it.
+
+        Only ever called for a lease that is still alive, so this cannot bring
+        an expired browser back.
+        """
+
+        lease = self._active_lease(token)
+        with self._lock:
+            if self._leases.get(token) is not lease or lease._closed:
+                raise BrowserLeaseUnavailableError(
+                    "追加認証用ブラウザを確認できませんでした。"
+                )
+            lease.expires_at = self._normalized_utcnow() + timedelta(
+                seconds=self.ttl_seconds
+            )
+            lease._expires_monotonic = self._monotonic() + self.ttl_seconds
+            timer = lease._timer
+            if timer is not None:
+                timer.cancel()
+            replacement = self._timer_factory(
+                self.ttl_seconds,
+                self._expire_lease,
+                args=(token, lease),
+            )
+            replacement.daemon = True
+            lease._timer = replacement
+            try:
+                replacement.start()
+            except Exception:
+                lease._timer = None
+                raise
+        return lease.metadata()
+
     @contextmanager
     def checkout(
         self,

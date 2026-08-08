@@ -329,6 +329,35 @@ class BrowserLeaseRegistryTest(unittest.TestCase):
         self.assertTrue(self.timers[0].daemon)
         self.assertTrue(self.timers[0].started)
 
+    def test_working_the_page_gives_the_owner_the_hold_back(self) -> None:
+        """An image check runs several rounds, each a tap and a redraw.
+
+        The hold counted down the whole time, so the browser could be taken
+        away part-way through and every round already answered thrown out.
+        """
+
+        _browser, _run_dir, ticket = self.create_lease()
+        self.clock[0] += 9 * 60
+
+        metadata = self.registry.extend(ticket.token)
+
+        self.clock[0] += 5 * 60
+        # Past the original ten minutes, and still there.
+        self.assertEqual(
+            "commufa", self.registry.metadata(ticket.token).service_id
+        )
+        self.assertEqual(ticket.expires_at, metadata.expires_at)
+        # The old countdown was called off rather than left to fire.
+        self.assertTrue(self.timers[0].cancelled)
+        self.assertTrue(self.timers[-1].started)
+
+    def test_a_hold_that_already_ran_out_is_not_revived(self) -> None:
+        _browser, _run_dir, ticket = self.create_lease()
+        self.clock[0] += 11 * 60
+
+        with self.assertRaises(BrowserLeaseUnavailableError):
+            self.registry.extend(ticket.token)
+
     def test_atomic_claim_allows_only_one_process_wide_attempt(self) -> None:
         barrier = threading.Barrier(3)
         tickets = []

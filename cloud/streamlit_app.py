@@ -1642,6 +1642,7 @@ def render_code_page_inspector(challenge: dict[str, Any], token: str) -> None:
     )
     view_key = f"live_view_code_{token}"
     st.session_state[f"{view_key}__gesture"] = "tap"
+    extend_challenge_hold(token)
     try:
         with challenge_runtime.browser_lease_registry.checkout(
             token,
@@ -1668,6 +1669,19 @@ def render_code_page_inspector(challenge: dict[str, Any], token: str) -> None:
     ):
         st.session_state.pop(opened_key, None)
         st.rerun()
+
+
+def extend_challenge_hold(token: str) -> None:
+    """Push the browser hold back out while the owner is still on the page.
+
+    Best effort: a hold that has already gone is reported by the checkout that
+    follows, and one that cannot be extended is no worse than before.
+    """
+
+    try:
+        challenge_runtime.browser_lease_registry.extend(token)
+    except Exception:
+        LOGGER.info("Browser hold was not extended")
 
 
 def interactive_challenge_fingerprint(challenge: dict[str, Any]) -> str:
@@ -1754,6 +1768,11 @@ def render_interactive_challenge(
     st.session_state[f"{view_key}__gesture"] = (
         "drag" if str(challenge.get("kind") or "") == "captcha" else "tap"
     )
+    # Looking at the page means the owner is still working it. An image check
+    # runs several rounds, each one a tap and a redraw, and the hold was
+    # counting down the whole time - so the browser could be taken away
+    # part-way through and every round already answered thrown out with it.
+    extend_challenge_hold(token)
     try:
         with challenge_runtime.browser_lease_registry.checkout(
             token,
