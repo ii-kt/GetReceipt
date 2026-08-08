@@ -1347,6 +1347,104 @@ class StreamlitAppTest(unittest.TestCase):
         counts = app.session_state["getreceipt_signin_attempts"]
         self.assertEqual({}, {key: value for key, value in counts.items() if value})
 
+    def test_clearing_the_check_hands_over_to_a_box_that_can_type(self) -> None:
+        """Clearing one gate reveals the next, and it is rarely the same kind.
+
+        Answering the bot check is what makes d-account ask for the code. The
+        old kind was carried forward, so the mirrored page stayed up for a
+        screen wanting six digits typed into it - and the mirror can only send
+        taps. There was nowhere to type and no way forward.
+        """
+
+        storage = FakeDriveStorage(
+            [
+                receipt_file("20260605", "株式会社エポスカード", 87560),
+                receipt_file("20260812", "中部テレコミュニケーション株式会社", 10002),
+                receipt_file("20260812", "フラットエナジー株式会社", 10003),
+            ]
+        )
+        registry = FakeBrowserLeaseRegistry()
+        browser = MagicMock()
+        browser.current_page_target.return_value = {
+            "url": "https://cfg.smt.docomo.ne.jp/auth/cgi/anidlogin"
+        }
+        browser.all_cookies.return_value = [
+            {"name": "cf_clearance", "value": "granted", "domain": ".docomo.ne.jp"}
+        ]
+        profile_store = MagicMock()
+        profile_store.load_cookies.return_value = []
+
+        class GateFetcher:
+            def resume_after_interactive_challenge(self, target_month):
+                return object()
+
+            def resume_after_security_code(self, target_month, code):
+                return object()
+
+        calls = 0
+
+        def acquire(**kwargs):
+            nonlocal calls
+            calls += 1
+            kind = "interactive" if calls == 1 else "verification_code"
+            if calls > 1:
+                kwargs["fetch_statement"](kwargs["target_month"])
+            return SimpleNamespace(
+                success=False,
+                action_required=True,
+                challenge=SimpleNamespace(kind=kind, message="次の確認が必要です。"),
+                failure=None,
+            )
+
+        app = self.app()
+        app.secrets["microsoft_graph"] = {
+            "client_id": "11111111-1111-1111-1111-111111111111",
+            "client_secret": "confidential-client-secret-value",
+            "encryption_key": Fernet.generate_key().decode("ascii"),
+        }
+        with (
+            patch.object(DriveStorage, "from_secrets", return_value=storage),
+            patch("src.automation.browser_session.ManagedBrowser", return_value=browser),
+            patch(
+                "src.automation.providers.build_receipt_fetcher",
+                return_value=GateFetcher(),
+            ),
+            patch("src.workflows.auto_acquisition.run_auto_acquisition", side_effect=acquire),
+            patch("src.automation.security_challenge.browser_lease_registry", registry),
+            patch("src.ui.live_view.render_live_view") as live_view_render,
+            patch(
+                "src.storage.browser_profile_store.BrowserProfileStore",
+                return_value=profile_store,
+            ),
+            patch("src.ui.graph_link.render_graph_connection", return_value=True),
+            patch("src.storage.status_store.ServiceStatusStore.load", return_value={}),
+        ):
+            app.run(timeout=20)
+            next(b for b in app.button if "自動取得" in b.label).click().run(timeout=20)
+
+            # A bot check: mirrored, no code box.
+            self.assertEqual([], [item.label for item in app.text_input])
+            next(
+                b for b in app.button if b.label == "🧩 確認チェックを開く"
+            ).click().run(timeout=20)
+            live_view_render.assert_called()
+
+            next(
+                b for b in app.button if b.label == "🧩 解除して自動取得を続ける"
+            ).click().run(timeout=20)
+
+        # The check came down, so a box that can type is offered instead.
+        self.assertEqual(
+            ["メールまたはSMSに届いた確認コード"],
+            [item.label for item in app.text_input],
+        )
+        self.assertFalse(any(b.label.startswith("🧩") for b in app.button))
+        # And what the provider granted for it was kept there and then, rather
+        # than waiting for an acquisition that has not finished.
+        profile_store.save_cookies.assert_called_once()
+        self.assertEqual("mobile", profile_store.save_cookies.call_args.args[0])
+        self.assertEqual([], list(app.exception))
+
     def test_an_unfinished_puzzle_keeps_the_same_browser_and_reopens(self) -> None:
         """Pressing 解除 too early must not throw the sign-in away.
 

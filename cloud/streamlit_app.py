@@ -1016,6 +1016,14 @@ def execute_next_service(storage: DriveStorage, batch: dict[str, Any]) -> None:
         # it, and none of them has to remember to check.
         browser.set_deadline(SERVICE_ATTEMPT_BUDGET_SECONDS)
         attempt_deadline = time.monotonic() + SERVICE_ATTEMPT_BUDGET_SECONDS
+        if profile_store is not None:
+            # Cookies kept the moment a hand-worked check came down, which the
+            # profile archive cannot carry because it is only taken once the
+            # browser closes.
+            try:
+                browser.apply_cookies(profile_store.load_cookies(service_id))
+            except Exception:
+                LOGGER.info("Stored cookies were not used for %s", service_id)
         fetcher = build_receipt_fetcher(service_id, browser, credentials)
         attempt_started_at = datetime.now(timezone.utc)
         # The workflow is deliberately not given a cancellation check: once the
@@ -1243,11 +1251,22 @@ def resume_security_code(
         if solved_browser is not None:
             solved_browser.set_deadline(None)
         updated = dict(challenge)
-        if interactive:
-            # The gate is still up: not cleared yet, or the provider put up a
-            # fresh one. Keep the same browser and let the owner try again
-            # rather than starting the sign-in over.
-            gate, instruction = interactive_gate_wording(challenge)
+        # Clearing one gate usually reveals the next, and it is rarely the same
+        # kind: answering the bot check is what makes d-account ask for the
+        # code. Carrying the old kind forward kept the mirrored page up for a
+        # screen that wants six digits typed into it - and the mirror can only
+        # send taps. There was nowhere to type, and no way forward.
+        next_kind = str(
+            getattr(getattr(result, "challenge", None), "kind", "") or ""
+        )
+        if next_kind:
+            updated["kind"] = next_kind
+        now_interactive = str(updated.get("kind") or "") in INTERACTIVE_CHALLENGE_KINDS
+        if now_interactive:
+            # Still something to work by hand: not cleared yet, or the provider
+            # put up a fresh one. Keep the same browser and let the owner try
+            # again rather than starting the sign-in over.
+            gate, instruction = interactive_gate_wording(updated)
             challenge_message = str(
                 getattr(getattr(result, "challenge", None), "message", "")
             )
@@ -1257,6 +1276,29 @@ def resume_security_code(
             st.session_state[SECURITY_CHALLENGE_KEY] = updated
             st.session_state[f"{PUZZLE_OPEN_KEY}_{token}"] = True
             status_box.update(label=f"{gate}をもう一度確認してください。", state="error")
+            st.rerun()
+        if interactive:
+            # The hand-worked gate came down and a code is being asked for.
+            # Whatever the provider granted for it is in this browser now, and
+            # the archive cannot be taken until the browser closes - which is
+            # not going to happen while a code is still needed. Keep the
+            # cookies instead, so nothing that goes wrong from here costs the
+            # owner that check a second time.
+            keep_cleared_cookies(profile_store, service_id, solved_browser)
+            # Hand over to the box that can actually type one, and put the
+            # mirror away.
+            st.session_state.pop(f"{PUZZLE_OPEN_KEY}_{token}", None)
+            st.session_state.pop(f"{PUZZLE_OPEN_KEY}_{token}__before", None)
+            updated["message"] = str(
+                getattr(getattr(result, "challenge", None), "message", "")
+                or "確認コードの入力が必要です。"
+            )
+            updated["error"] = ""
+            st.session_state[SECURITY_CHALLENGE_KEY] = updated
+            status_box.update(
+                label=f"{service.label}は確認コードの入力を待っています。",
+                state="running",
+            )
             st.rerun()
         minimum = int(challenge.get("min_length") or 6)
         maximum = int(challenge.get("max_length") or 6)
@@ -1567,39 +1609,49 @@ def render_security_code_form(
         render_interactive_challenge(storage, batch, challenge, token)
         return
 
-    with st.form("security_code_form", clear_on_submit=True, border=True):
-        minimum = int(challenge.get("min_length") or 6)
-        maximum = int(challenge.get("max_length") or 6)
-        input_label = str(challenge.get("input_label") or "確認コード")
-        placeholder = (
-            f"{minimum}桁の数字"
-            if minimum == maximum
-            else f"{minimum}〜{maximum}桁の数字"
-        )
-        code = st.text_input(
-            input_label,
-            type="password",
-            max_chars=maximum,
-            autocomplete="one-time-code",
-            placeholder=placeholder,
-        )
-        submitted = st.form_submit_button(
-            "認証して自動取得を続行",
-            type="primary",
-            use_container_width=True,
-            icon=":material/verified_user:",
-        )
+    minimum = int(challenge.get("min_length") or 6)
+    maximum = int(challenge.get("max_length") or 6)
+    input_label = str(challenge.get("input_label") or "確認コード")
+    placeholder = (
+        f"{minimum}桁の数字"
+        if minimum == maximum
+        else f"{minimum}〜{maximum}桁の数字"
+    )
+    pattern = str(challenge.get("pattern") or r"^[0-9]{6}$")
+    # Not a form, and not masked. A one-time code the owner is reading off
+    # their own phone gains nothing from being hidden, and hiding it cost
+    # them the ability to see what they had typed - and cost iOS the hint it
+    # needs to offer the code straight from Messages. Outside a form, the
+    # value arrives as soon as they finish typing, so a complete code needs
+    # no second tap at all.
+    code_key = f"security_code_input_{token}"
+    typed = st.text_input(
+        input_label,
+        key=code_key,
+        max_chars=maximum,
+        autocomplete="one-time-code",
+        placeholder=placeholder,
+        help="SMSやメールから貼り付けてもそのまま進みます。",
+    )
+    normalized_code = unicodedata.normalize("NFKC", str(typed or "")).strip()
+    complete = re.fullmatch(pattern, normalized_code) is not None
 
-    if submitted:
-        normalized_code = unicodedata.normalize("NFKC", str(code or "")).strip()
-        pattern = str(challenge.get("pattern") or r"^[0-9]{6}$")
-        if re.fullmatch(pattern, normalized_code) is None:
+    submitted = st.button(
+        "認証して自動取得を続行",
+        type="primary",
+        use_container_width=True,
+        icon=":material/verified_user:",
+        disabled=not complete,
+    )
+
+    if complete or submitted:
+        if not complete:
             updated = dict(challenge)
-            updated["error"] = (
-                f"確認コードは{placeholder}で入力してください。"
-            )
+            updated["error"] = f"確認コードは{placeholder}で入力してください。"
             st.session_state[SECURITY_CHALLENGE_KEY] = updated
             st.rerun()
+        # The code never outlives the call it is passed to.
+        st.session_state.pop(code_key, None)
         resume_security_code(storage, batch, challenge, normalized_code)
 
     render_code_page_inspector(challenge, token)
@@ -1669,6 +1721,23 @@ def render_code_page_inspector(challenge: dict[str, Any], token: str) -> None:
     ):
         st.session_state.pop(opened_key, None)
         st.rerun()
+
+
+def keep_cleared_cookies(
+    profile_store: Any, service_id: str, browser: Any
+) -> None:
+    """Save what the provider granted, without closing the browser.
+
+    Best effort throughout: this is insurance against having to answer the
+    same check again, and it must never cost the sign-in it is insuring.
+    """
+
+    if profile_store is None or browser is None:
+        return
+    try:
+        profile_store.save_cookies(service_id, browser.all_cookies())
+    except Exception:
+        LOGGER.info("Cleared-gate cookies were not kept for %s", service_id)
 
 
 def extend_challenge_hold(token: str) -> None:

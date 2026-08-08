@@ -888,6 +888,52 @@ class ManagedBrowser:
         assert self.connection is not None
         return self.connection.send("Network.getCookies", {"urls": [url]}, session_id=session_id).get("cookies", [])
 
+    def all_cookies(self) -> list[dict[str, Any]]:
+        """Every cookie the browser is holding, taken while it stays open.
+
+        What a provider grants for a check answered by hand is a cookie, and
+        the only way to keep it used to be to close the browser and archive
+        the profile. That cannot be done in the middle of a sign-in, so the
+        grant lived nowhere but in a running browser until the whole
+        acquisition finished - and anything that went wrong before then meant
+        answering the check all over again.
+        """
+
+        session_id = self.ensure_page()
+        assert self.connection is not None
+        result = self.connection.send("Network.getAllCookies", session_id=session_id)
+        cookies = result.get("cookies")
+        return [item for item in cookies if isinstance(item, dict)] if isinstance(cookies, list) else []
+
+    def apply_cookies(self, cookies: list[dict[str, Any]]) -> int:
+        """Put saved cookies back. Returns how many the browser accepted."""
+
+        if not cookies:
+            return 0
+        session_id = self.ensure_page()
+        assert self.connection is not None
+        allowed = (
+            "name",
+            "value",
+            "domain",
+            "path",
+            "secure",
+            "httpOnly",
+            "sameSite",
+            "expires",
+        )
+        prepared = [
+            {key: cookie[key] for key in allowed if key in cookie}
+            for cookie in cookies
+            if isinstance(cookie, dict) and cookie.get("name")
+        ]
+        if not prepared:
+            return 0
+        self.connection.send(
+            "Network.setCookies", {"cookies": prepared}, session_id=session_id
+        )
+        return len(prepared)
+
     def clear_downloads(self) -> None:
         ensure_private_directory(self.download_dir)
         for child in self.download_dir.iterdir():

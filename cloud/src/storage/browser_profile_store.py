@@ -14,6 +14,7 @@ Drive only ever sees ciphertext.
 from __future__ import annotations
 
 import io
+import json
 import logging
 import tarfile
 from pathlib import Path
@@ -28,6 +29,9 @@ __all__ = ["BrowserProfileStore", "PROFILE_MEMBER_PREFIXES"]
 LOGGER = logging.getLogger(__name__)
 
 _FILE_PREFIX = ".getreceipt-profile-"
+# Kept beside the profile rather than inside it: cookies can be taken from a
+# running browser, and the archive cannot.
+_COOKIE_FILE_PREFIX = ".getreceipt-cookies-"
 _MIME_TYPE = "application/octet-stream"
 # A session lives in the cookie jar and site storage. Everything else in a
 # Chrome profile is cache and machine state, which must not travel.
@@ -128,6 +132,53 @@ class BrowserProfileStore:
             return False
         return True
 
+    def save_cookies(self, service_id: str, cookies: list[dict]) -> bool:
+        """Keep the browser's cookies while it is still open.
+
+        What a provider grants for a check answered by hand is a cookie, and
+        archiving the profile can only be done once the browser has closed -
+        which cannot happen in the middle of a sign-in. So the grant survived
+        nowhere until the whole acquisition finished, and anything that went
+        wrong before then cost the owner the check all over again. Taken
+        straight from the browser, it can be kept the moment it is earned.
+        """
+
+        if not cookies:
+            return False
+        try:
+            payload = json.dumps(
+                [item for item in cookies if isinstance(item, dict)],
+                ensure_ascii=False,
+            ).encode("utf-8")
+        except Exception:
+            LOGGER.info("Browser cookies could not be serialised")
+            return False
+        if len(payload) > MAX_ARCHIVE_BYTES:
+            LOGGER.info("Browser cookies are too large to keep")
+            return False
+        try:
+            self._upload(self._cookie_file_name(service_id), self._fernet.encrypt(payload))
+        except Exception:
+            LOGGER.info("Browser cookies could not be stored")
+            return False
+        return True
+
+    def load_cookies(self, service_id: str) -> list[dict]:
+        """Return the kept cookies; empty whenever they cannot be read."""
+
+        try:
+            payload = self._download(self._cookie_file_name(service_id))
+            if not payload:
+                return []
+            decoded = json.loads(self._fernet.decrypt(payload).decode("utf-8"))
+        except InvalidToken:
+            LOGGER.info("Stored browser cookies could not be decrypted; ignoring them")
+            return []
+        except Exception:
+            LOGGER.info("Stored browser cookies could not be read; ignoring them")
+            return []
+        return [item for item in decoded if isinstance(item, dict)] if isinstance(decoded, list) else []
+
     def forget(self, service_id: str) -> bool:
         """Drop the saved profile, so the next run signs in from scratch."""
 
@@ -152,6 +203,10 @@ class BrowserProfileStore:
         if not normalized or any(ch not in _SAFE_SERVICE_ID for ch in normalized):
             raise ValueError("invalid service_id")
         return f"{_FILE_PREFIX}{normalized}"
+
+    @classmethod
+    def _cookie_file_name(cls, service_id: str) -> str:
+        return cls._file_name(service_id).replace(_FILE_PREFIX, _COOKIE_FILE_PREFIX, 1)
 
     def _download(self, name: str) -> bytes:
         file_id = self._find_file_id(name)
